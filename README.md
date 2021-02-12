@@ -23,7 +23,7 @@ This repository contains sample [AWS CloudFormation](https://aws.amazon.com/clou
 
 ----
 
-### Distributed Deployment Architecture
+### Distributed Deployment Architecture:
 
 **Template File Name:** [anfw-distributed-template.yaml](https://github.com/aws-samples/aws-networkfirewall-cfn-templates/blob/main/anfw-distributed-template.yaml)
 
@@ -34,7 +34,7 @@ This repository contains sample [AWS CloudFormation](https://aws.amazon.com/clou
 
 ----
 
-### Centralized Deployment Architecture
+### Centralized Deployment Architecture :
 
 
 **Template File Name:** [anfw-centralized-template.yaml](https://github.com/aws-samples/aws-networkfirewall-cfn-templates/blob/main/anfw-centralized-template.yaml)

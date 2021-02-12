@@ -41,7 +41,6 @@ This repository contains sample [AWS CloudFormation](https://aws.amazon.com/clou
 
 **Deployment Architecture:**
 
-File name 
 ![](images/anfw-central-model.png)
 
 

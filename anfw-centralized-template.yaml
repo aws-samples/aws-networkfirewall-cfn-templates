@@ -1,4 +1,4 @@
-#Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
 
 #THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 #IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
@@ -352,19 +352,6 @@ Resources:
         - Key: Name
           Value: !Sub "egress-${AWS::StackName}"
 
-  SubnetDFirewall:
-    Type: AWS::EC2::Subnet
-    Properties:
-      VpcId:
-        Ref: VPCD
-      CidrBlock: "10.10.16.0/28"
-      AvailabilityZone:
-        Ref: AvailabilityZoneSelection
-      MapPublicIpOnLaunch: false
-      Tags:
-        - Key: Name
-          Value: !Sub "egress-firewall-${AWS::StackName}"
-
   SubnetDTGW:
     Type: AWS::EC2::Subnet
     Properties:
@@ -430,8 +417,9 @@ Resources:
     Properties:
       AmazonSideAsn: 65000
       Description: "TGW Network Firewall Demo"
-      AutoAcceptSharedAttachments: "enable"
+      AutoAcceptSharedAttachments: "disable"
       DefaultRouteTableAssociation: "disable"
+      DefaultRouteTablePropagation: "disable"
       DnsSupport: "enable"
       VpnEcmpSupport: "enable"
       Tags:
@@ -583,59 +571,7 @@ Resources:
             LogDestination:
               logGroup: !Sub "/${AWS::StackName}/inspection-fw/alert"
   
-  EgressFirewallPolicy:
-    Type: AWS::NetworkFirewall::FirewallPolicy
-    Properties:
-      FirewallPolicyName: !Sub "egress-firewall-policy-${AWS::StackName}"
-      FirewallPolicy:
-        StatelessDefaultActions:
-          - 'aws:forward_to_sfe'
-        StatelessFragmentDefaultActions:
-          - 'aws:forward_to_sfe'
-        StatefulRuleGroupReferences:
-          - ResourceArn: !Ref DomainAllowStatefulRuleGroup
-          - ResourceArn: !Ref ICMPAlertStatefulRuleGroup
-      Tags:
-        - Key: Name
-          Value: !Sub "egress-firewall-policy-${AWS::StackName}"
 
-  EgressFirewall:
-    Type: AWS::NetworkFirewall::Firewall
-    Properties:
-      FirewallName: !Sub "egress-firewall-${AWS::StackName}"
-      FirewallPolicyArn: !Ref EgressFirewallPolicy
-      VpcId: !Ref VPCD
-      SubnetMappings:
-        - SubnetId: !Ref SubnetDFirewall
-      Tags:
-        - Key: Name
-          Value: !Sub "egress-firewall-${AWS::StackName}"
-
-  EgressFirewallLogFlowGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/${AWS::StackName}/egress-fw/flow"
-
-  EgressFirewallLogAlertGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/${AWS::StackName}/egress-fw/alert"
-      
-  EgressFirewallLog:
-    Type: AWS::NetworkFirewall::LoggingConfiguration
-    Properties:
-      FirewallArn: !Ref EgressFirewall
-      LoggingConfiguration:
-        LogDestinationConfigs:
-          - LogType: FLOW
-            LogDestinationType: CloudWatchLogs
-            LogDestination:
-              logGroup: !Sub "/${AWS::StackName}/egress-fw/flow"
-          - LogType: ALERT
-            LogDestinationType: CloudWatchLogs
-            LogDestination:
-              logGroup: !Sub "/${AWS::StackName}/egress-fw/alert"
- 
 
 # Route Tables
   SubnetAWorkloadRouteTable:
@@ -730,68 +666,6 @@ Resources:
       VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt InspectionFirewall.EndpointIds]]]
       RouteTableId: !Ref SubnetCTGWRouteTable
 
-  SubnetDFirewallRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPCD
-      Tags:
-        - Key: Name
-          Value: !Sub "subnet-d-firewall-route-table-${AWS::StackName}"
-
-  SubnetDFirewallRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: SubnetDFirewall
-    Properties:
-      RouteTableId: !Ref SubnetDFirewallRouteTable
-      SubnetId: !Ref SubnetDFirewall
-
-  SubnetDFirewallInternalRoute:
-    Type: AWS::EC2::Route
-    DependsOn: AttachVPCD
-    Properties:
-      DestinationCidrBlock: "10.0.0.0/8"
-      TransitGatewayId: !Ref TransitGateway
-      RouteTableId: !Ref SubnetDFirewallRouteTable
-      
-  SubnetDFirewallDefaultRoute:
-    Type: AWS::EC2::Route
-    DependsOn: SubnetDNATGateway
-    Properties:
-      DestinationCidrBlock: "0.0.0.0/0"
-      NatGatewayId: !Ref SubnetDNATGateway
-      RouteTableId: !Ref SubnetDFirewallRouteTable
- 
-  SubnetDPublicRouteTable:
-    Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPCD
-      Tags:
-        - Key: Name
-          Value: !Sub "subnet-d-public-route-table-${AWS::StackName}"
-
-  SubnetDPublicRouteTableAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: SubnetDPublic
-    Properties:
-      RouteTableId: !Ref SubnetDPublicRouteTable
-      SubnetId: !Ref SubnetDPublic
-
-  SubnetDPublicInternalRoute:
-    Type: AWS::EC2::Route
-    DependsOn: EgressFirewall
-    Properties:
-      DestinationCidrBlock: "10.0.0.0/8"
-      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt EgressFirewall.EndpointIds]]]
-      RouteTableId: !Ref SubnetDPublicRouteTable
-      
-  SubnetDPublicDefaultRoute:
-    Type: AWS::EC2::Route
-    DependsOn: InternetGatewayVPCD
-    Properties:
-      DestinationCidrBlock: "0.0.0.0/0"
-      GatewayId: !Ref InternetGatewayVPCD
-      RouteTableId: !Ref SubnetDPublicRouteTable
- 
   SubnetDTGWRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -800,21 +674,60 @@ Resources:
         - Key: Name
           Value: !Sub "subnet-d-tgw-route-table-${AWS::StackName}"
 
+  SubnetDTGWCorpRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCC
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetDTGWRouteTable
+
+  SubnetDTGWDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCC
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref SubnetDNATGateway
+      RouteTableId: !Ref SubnetDTGWRouteTable
+
+  SubnetDPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-public-route-table-${AWS::StackName}"
+
+  SubnetDPublicCorpRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCD
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetDPublicRouteTable
+
+  SubnetDPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCD
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGatewayVPCD
+      RouteTableId: !Ref SubnetDPublicRouteTable
+
   SubnetDTGWRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     DependsOn: SubnetDTGW
     Properties:
       RouteTableId: !Ref SubnetDTGWRouteTable
       SubnetId: !Ref SubnetDTGW
-    
-  SubnetDTGWDefaultRoute:
-    Type: AWS::EC2::Route
-    DependsOn: EgressFirewall
+
+  SubnetDPublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDPublic
     Properties:
-      DestinationCidrBlock: "0.0.0.0/0"
-      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt EgressFirewall.EndpointIds]]]
-      RouteTableId: !Ref SubnetDTGWRouteTable
-      
+      RouteTableId: !Ref SubnetDPublicRouteTable
+      SubnetId: !Ref SubnetDPublic
+
   SpokeRouteTable:
     Type: "AWS::EC2::TransitGatewayRouteTable"
     Properties:
@@ -853,12 +766,31 @@ Resources:
     Type: AWS::EC2::TransitGatewayRouteTableAssociation
     Properties:
       TransitGatewayAttachmentId: !Ref AttachVPCD
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  PropagateVPCARoute:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCA
       TransitGatewayRouteTableId: !Ref FirewallRouteTable
+
+  PropagateVPCBRoute:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCB
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+
+  PropagateVPDARoute:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCD
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+
 
   SpokeInspectionRoute:
     Type: AWS::EC2::TransitGatewayRoute
     Properties:
-      DestinationCidrBlock: "10.0.0.0/8"
+      DestinationCidrBlock: "0.0.0.0/0"
       TransitGatewayAttachmentId: !Ref AttachVPCC
       TransitGatewayRouteTableId: !Ref SpokeRouteTable
       
@@ -867,18 +799,4 @@ Resources:
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
       TransitGatewayAttachmentId: !Ref AttachVPCD
-      TransitGatewayRouteTableId: !Ref SpokeRouteTable
-      
-  FirewallSpokeARoute:
-    Type: AWS::EC2::TransitGatewayRoute
-    Properties:
-      DestinationCidrBlock: "10.1.0.0/16"
-      TransitGatewayAttachmentId: !Ref AttachVPCA
-      TransitGatewayRouteTableId: !Ref FirewallRouteTable
-      
-  FirewallSpokeBRoute:
-    Type: AWS::EC2::TransitGatewayRoute
-    Properties:
-      DestinationCidrBlock: "10.2.0.0/16"
-      TransitGatewayAttachmentId: !Ref AttachVPCB
       TransitGatewayRouteTableId: !Ref FirewallRouteTable

@@ -1,0 +1,1333 @@
+#Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+#FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+#COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+#IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+#CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS Network Firewall Demo using multiple VPCs"
+
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: "VPC Parameters"
+        Parameters: 
+          - AvailabilityZone1Selection
+          - AvailabilityZone2Selection
+      - Label:
+          default: "EC2 Parameters"
+        Parameters: 
+          - LatestAmiId
+
+Parameters:
+  AvailabilityZone1Selection:
+    Description: Availability Zone 1
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  AvailabilityZone2Selection:
+    Description: Availability Zone 2
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+
+  LatestAmiId:
+    Description: Latest EC2 AMI from Systems Manager Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+      
+Resources:
+# spoke-a VPC
+  VPCA:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.1.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-${AWS::StackName}"
+
+  SubnetAWorkload:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCA
+      CidrBlock: "10.1.1.0/24"
+      AvailabilityZone: 
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-workload-${AWS::StackName}"
+
+  SubnetATGW:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCA
+      CidrBlock: "10.1.0.0/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-tgw-${AWS::StackName}"
+
+  VPCAEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Allow instances to get to SSM Systems Manager
+        VpcId: !Ref VPCA
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.1.0.0/16
+
+  VPCASSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCAEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+        SubnetIds: 
+          - !Ref SubnetAWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCA
+
+  VPCAEC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCAEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+        SubnetIds: 
+          - !Ref SubnetAWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCA
+
+  VPCASSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCAEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+        SubnetIds: 
+          - !Ref SubnetAWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCA
+ 
+  SubnetARole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "subnet-a-role-${AWS::Region}-${AWS::StackName}"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  SubnetAInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref SubnetARole
+        
+  SubnetASecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ICMP acess from 10.0.0.0/8"
+      GroupName: !Sub "spoke-a-sec-group-${AWS::StackName}"
+      VpcId: !Ref VPCA
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          CidrIp: 10.0.0.0/8
+          FromPort: "-1"
+          ToPort: "-1"
+ 
+  EC2SubnetA:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetAWorkload
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SubnetASecGroup
+      IamInstanceProfile: !Ref SubnetAInstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-${AWS::StackName}"
+      
+# spoke-b VPC
+  VPCB:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.2.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-${AWS::StackName}"
+
+  SubnetBWorkload:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCB
+      CidrBlock: "10.2.1.0/24"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-workload-${AWS::StackName}"
+
+  SubnetBTGW:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCB
+      CidrBlock: "10.2.0.0/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-tgw-${AWS::StackName}"
+
+  VPCBEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Allow instances to get to SSM Systems Manager
+        VpcId: !Ref VPCB
+        SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.2.0.0/16
+
+  VPCBSSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCBEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+        SubnetIds: 
+          - !Ref SubnetBWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCB
+
+  VPCBEC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCBEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+        SubnetIds: 
+          - !Ref SubnetBWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCB
+
+  VPCBSSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+        PrivateDnsEnabled: true
+        SecurityGroupIds: 
+          - !Ref VPCBEndpointSecurityGroup
+        ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+        SubnetIds: 
+          - !Ref SubnetBWorkload
+        VpcEndpointType: Interface
+        VpcId: !Ref VPCB
+
+  SubnetBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "subnet-b-role-${AWS::Region}-${AWS::StackName}"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  SubnetBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref SubnetBRole
+        
+  SubnetBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ICMP acess from 10.0.0.0/8"
+      GroupName: !Sub "spoke-b-sec-group-${AWS::StackName}"
+      VpcId: !Ref VPCB
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          CidrIp: 10.0.0.0/8
+          FromPort: "-1"
+          ToPort: "-1"
+ 
+  EC2SubnetB:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetBWorkload
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SubnetBSecGroup
+      IamInstanceProfile: !Ref SubnetBInstanceProfile
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-${AWS::StackName}"
+
+# inspection VPC
+  VPCC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "100.64.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-vpc-${AWS::StackName}"
+
+  SubnetCTGWA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCC
+      CidrBlock: "100.64.0.0/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "inspections-tgw-a-${AWS::StackName}"
+
+  SubnetCFirewallA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCC
+      CidrBlock: "100.64.0.16/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-firewall-a-${AWS::StackName}"
+
+  SubnetCTGWB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCC
+      CidrBlock: "100.64.0.32/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "inspections-tgw-b-${AWS::StackName}"
+
+  SubnetCFirewallB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCC
+      CidrBlock: "100.64.0.48/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-firewall-b-${AWS::StackName}"
+
+# egress VPC
+  VPCD:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.10.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-${AWS::StackName}"
+
+  SubnetDFirewallA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.16.0/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-firewall-a-${AWS::StackName}"
+
+  SubnetDTGWA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.0.0/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-tgw-a-${AWS::StackName}"
+
+  SubnetDPublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.1.0/24"
+      AvailabilityZone:
+        Ref: AvailabilityZone1Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-public-a-${AWS::StackName}"
+
+  SubnetDFirewallB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.16.16/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-firewall-b-${AWS::StackName}"
+
+  SubnetDTGWB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.0.16/28"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-tgw-b-${AWS::StackName}"
+
+  SubnetDPublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPCD
+      CidrBlock: "10.10.2.0/24"
+      AvailabilityZone:
+        Ref: AvailabilityZone2Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-public-b-${AWS::StackName}"
+
+  InternetGatewayVPCD:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-igw-${AWS::StackName}"
+
+  AttachGatewayVPCD:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        !Ref VPCD
+      InternetGatewayId:
+        !Ref InternetGatewayVPCD
+
+  SubnetDNATEIPA:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+
+  SubnetDNATGatewayA:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - SubnetDNATEIPA
+          - AllocationId
+      SubnetId:
+        Ref: SubnetDPublicA
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-natgw-a-${AWS::StackName}"
+
+  SubnetDNATEIPB:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+
+  SubnetDNATGatewayB:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - SubnetDNATEIPB
+          - AllocationId
+      SubnetId:
+        Ref: SubnetDPublicB
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-natgw-b-${AWS::StackName}"
+
+# Transit Gateway
+  TransitGateway:
+    Type: "AWS::EC2::TransitGateway"
+    Properties:
+      AmazonSideAsn: 65000
+      Description: "TGW Network Firewall Demo"
+      AutoAcceptSharedAttachments: "enable"
+      DefaultRouteTableAssociation: "disable"
+      DnsSupport: "enable"
+      VpnEcmpSupport: "enable"
+      Tags:
+        - Key: Name
+          Value: !Sub "tgw-${AWS::StackName}"
+
+  AttachVPCA:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds: 
+        - !Ref SubnetATGW
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      VpcId: !Ref VPCA
+
+  AttachVPCB:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds: 
+        - !Ref SubnetBTGW
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      VpcId: !Ref VPCB
+
+  AttachVPCC:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds: 
+        - !Ref SubnetCTGWA
+        - !Ref SubnetCTGWB
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      VpcId: !Ref VPCC
+
+  AttachVPCD:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds: 
+        - !Ref SubnetDTGWA
+        - !Ref SubnetDTGWB
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      VpcId: !Ref VPCD
+
+# To ensure flow symmetry, Transit Gateway appliance mode is enabled on the Inspection VPC’s attachment.
+# For more details on Transit Gateway appliance mode, refer to:
+# https://aws.amazon.com/blogs/networking-and-content-delivery/centralized-inspection-architecture-with-aws-gateway-load-balancer-and-aws-transit-gateway/
+# https://docs.aws.amazon.com/vpc/latest/tgw/transit-gateway-appliance-scenario.html
+# CloudFormation yet does not support enabling appliance mode. Hence need to enable it using Lambda custom resource:
+
+# Transit Gateway appliance mode Lambda Role:
+  TgwLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-tgw-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt TgwApplianceModeLogGroup.Arn
+              - Effect: Allow
+                Action:
+                  - ec2:ModifyTransitGatewayVpcAttachment
+                  - ec2:DescribeTransitGatewayVpcAttachments
+                Resource: "*"
+
+# Enable Transit Gateway Appliance Mode Lambda Custom Resource:
+  TgwApplianceModeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        LogGroupName: !Sub /aws/lambda/${AWS::StackName}-tgw-appliancemode
+        RetentionInDays: 1
+
+  TgwApplianceMode:
+    Type: AWS::Lambda::Function
+    DependsOn: TgwApplianceModeLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-tgw-appliancemode
+      Handler: "index.handler"
+      Role: !GetAtt TgwLambdaExecutionRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import logging
+
+          def handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              responseData = {}
+              responseStatus = cfnresponse.FAILED
+              logger.info('Received event: {}'.format(json.dumps(event)))
+              if event["RequestType"] == "Delete":
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData)
+              if event["RequestType"] == "Create":
+                  try:
+                      TgwInspectionVpcAttachmentId = event["ResourceProperties"]["TgwInspectionVpcAttachmentId"]
+                      ApplianceMode = event["ResourceProperties"]["ApplianceMode"]
+                  except Exception as e:
+                      logger.info('Key retrieval failure: {}'.format(e))
+                  try:
+                      ec2 = boto3.client('ec2')
+                  except Exception as e:
+                      logger.info('boto3.client failure: {}'.format(e))
+                  try:
+                      ec2.modify_transit_gateway_vpc_attachment(
+                          TransitGatewayAttachmentId = TgwInspectionVpcAttachmentId,
+                          Options = {'ApplianceModeSupport': ApplianceMode}
+                      )
+                      TgwResponse = ec2.describe_transit_gateway_vpc_attachments(
+                          TransitGatewayAttachmentIds=[TgwInspectionVpcAttachmentId]
+                      )
+                      ApplianceModeStatus = TgwResponse['TransitGatewayVpcAttachments'][0]['Options']['ApplianceModeSupport']
+                  except Exception as e:
+                      logger.info('ec2.modify/describe_transit_gateway_vpc_attachment: {}'.format(e))
+
+                  responseData['ApplianceModeStatus'] = ApplianceModeStatus
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData)
+      Runtime: python3.7
+      Timeout: 30
+
+  ApplianceModeEnabled:
+    Type: Custom::ModifyTransitGatewayVpcAttachment
+    Properties:
+      ServiceToken: !GetAtt TgwApplianceMode.Arn
+      TgwInspectionVpcAttachmentId: !Ref AttachVPCC
+      ApplianceMode: enable
+ 
+# Firewalls
+
+  ICMPAlertStatefulRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: !Sub "icmp-alert-${AWS::StackName}"
+      Type: STATEFUL
+      Capacity: 100
+      RuleGroup:
+        RulesSource:
+          StatefulRules:
+            - Action: ALERT
+              Header:
+                Direction: ANY
+                Protocol: ICMP
+                Destination: ANY
+                Source: ANY
+                DestinationPort: ANY
+                SourcePort: ANY
+              RuleOptions:
+                - Keyword: "sid:1"
+      Tags:
+        - Key: Name
+          Value: !Sub "icmp-alert-${AWS::StackName}" 
+          
+  DomainAllowStatefulRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: !Sub "domain-allow-${AWS::StackName}"
+      Type: STATEFUL
+      Capacity: 100
+      RuleGroup:
+        RuleVariables:
+          IPSets:
+            HOME_NET:
+              Definition:
+                - "10.0.0.0/8"
+        RulesSource:
+          RulesSourceList:
+            TargetTypes:
+              - HTTP_HOST
+              - TLS_SNI
+            Targets: 
+              - ".amazon.com"
+            GeneratedRulesType: "ALLOWLIST"
+      Tags:
+        - Key: Name
+          Value: !Sub "domain-allow-${AWS::StackName}"   
+
+# Inspection Firewall configuration:
+  InspectionFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: !Sub "inspection-firewall-policy-${AWS::StackName}"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref ICMPAlertStatefulRuleGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-firewall-policy-${AWS::StackName}"
+
+  InspectionFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub "inspection-firewall-${AWS::StackName}"
+      FirewallPolicyArn: !Ref InspectionFirewallPolicy
+      VpcId: !Ref VPCC
+      SubnetMappings:
+        - SubnetId: !Ref SubnetCFirewallA
+        - SubnetId: !Ref SubnetCFirewallB
+      Tags:
+        - Key: Name
+          Value: !Sub "inspection-firewall-${AWS::StackName}"
+
+  InspectionFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/inspection-fw/flow"
+
+  InspectionFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/inspection-fw/alert"
+    
+  InspectionFirewallLog:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref InspectionFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/inspection-fw/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/inspection-fw/alert"
+  
+# Egress Firewall configuration:
+  EgressFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: !Sub "egress-firewall-policy-${AWS::StackName}"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref DomainAllowStatefulRuleGroup
+          - ResourceArn: !Ref ICMPAlertStatefulRuleGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-firewall-policy-${AWS::StackName}"
+
+  EgressFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub "egress-firewall-${AWS::StackName}"
+      FirewallPolicyArn: !Ref EgressFirewallPolicy
+      VpcId: !Ref VPCD
+      SubnetMappings:
+        - SubnetId: !Ref SubnetDFirewallA
+        - SubnetId: !Ref SubnetDFirewallB
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-firewall-${AWS::StackName}"
+
+  EgressFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/egress-fw/flow"
+
+  EgressFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/egress-fw/alert"
+      
+  EgressFirewallLog:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref EgressFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/egress-fw/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/egress-fw/alert"
+
+# Fn::GetAtt for Firewall do not return VPCE Id in ordered format.
+# For more details refer to: https://github.com/aws-cloudformation/aws-cloudformation-resource-providers-networkfirewall/issues/15
+# Until the bug is fixed we have to rely on custom resource to retrieve AZ specific VPCE Id.
+
+# Firewall Endpoint Id Retrieval Lambda Role:
+  FwLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-${AWS::Region}-nfw-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !GetAtt RetrieveVpcIdLogGroup.Arn
+              - Effect: Allow
+                Action:
+                  - network-firewall:DescribeFirewall
+                Resource: "*"
+
+# Retrieve VpceId Lambda Custom Resource:
+  RetrieveVpcIdLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        LogGroupName: !Sub /aws/lambda/${AWS::StackName}-retrieve-vpceid
+        RetentionInDays: 1
+
+  RetrieveVpceId:
+    Type: AWS::Lambda::Function
+    DependsOn: RetrieveVpcIdLogGroup
+    Properties:
+      FunctionName: !Sub ${AWS::StackName}-retrieve-vpceid
+      Handler: "index.handler"
+      Role: !GetAtt
+        - FwLambdaExecutionRole
+        - Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import logging
+
+          def handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+              responseData = {}
+              responseStatus = cfnresponse.FAILED
+              logger.info('Received event: {}'.format(json.dumps(event)))
+              if event["RequestType"] == "Delete":
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData)
+              if event["RequestType"] == "Create":
+                  try:
+                      Az1 = event["ResourceProperties"]["Az1"]
+                      Az2 = event["ResourceProperties"]["Az2"]
+                      FwArn = event["ResourceProperties"]["FwArn"]
+                  except Exception as e:
+                      logger.info('AZ retrieval failure: {}'.format(e))
+                  try:
+                      nfw = boto3.client('network-firewall')
+                  except Exception as e:
+                      logger.info('boto3.client failure: {}'.format(e))
+                  try:
+                      NfwResponse=nfw.describe_firewall(FirewallArn=FwArn)
+                      VpceId1 = NfwResponse['FirewallStatus']['SyncStates'][Az1]['Attachment']['EndpointId']
+                      VpceId2 = NfwResponse['FirewallStatus']['SyncStates'][Az2]['Attachment']['EndpointId']
+
+                  except Exception as e:
+                      logger.info('ec2.describe_firewall failure: {}'.format(e))
+
+                  responseData['FwVpceId1'] = VpceId1
+                  responseData['FwVpceId2'] = VpceId2
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData)
+      Runtime: python3.7
+      Timeout: 30
+
+  InspectionFirewallVpceIds:
+    Type: Custom::DescribeVpcEndpoints
+    Properties:
+      ServiceToken: !GetAtt RetrieveVpceId.Arn
+      Az1: !Ref AvailabilityZone1Selection
+      Az2: !Ref AvailabilityZone2Selection
+      FwArn: !Ref InspectionFirewall
+
+  EgressFirewallVpceIds:
+    Type: Custom::DescribeVpcEndpoints
+    Properties:
+      ServiceToken: !GetAtt RetrieveVpceId.Arn
+      Az1: !Ref AvailabilityZone1Selection
+      Az2: !Ref AvailabilityZone2Selection
+      FwArn: !Ref EgressFirewall
+
+# Route Tables:
+# Spoke A route table configuration:
+  SubnetAWorkloadRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCA
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-a-workload-route-table-${AWS::StackName}"
+
+  SubnetAWorkloadRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetAWorkload
+    Properties:
+      RouteTableId: !Ref SubnetAWorkloadRouteTable
+      SubnetId: !Ref SubnetAWorkload
+
+  SubnetAWorkloadDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCA
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetAWorkloadRouteTable
+ 
+ # Spoke B route table configuration:
+  SubnetBWorkloadRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCB
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-b-workload-route-table-${AWS::StackName}"
+
+  SubnetBWorkloadRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetBWorkload
+    Properties:
+      RouteTableId: !Ref SubnetBWorkloadRouteTable
+      SubnetId: !Ref SubnetBWorkload
+
+  SubnetBWorkloadInternalRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCB
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetBWorkloadRouteTable
+
+# Inspection VPC route table configuration: AZ A
+  SubnetCFirewallRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCC
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-c-firewall-route-table-a-${AWS::StackName}"
+
+  SubnetCTGWRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCC
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-c-tgw-route-table-a-${AWS::StackName}"
+          
+  SubnetCFirewallRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetCFirewallA
+    Properties:
+      RouteTableId: !Ref SubnetCFirewallRouteTableA
+      SubnetId: !Ref SubnetCFirewallA
+
+  SubnetCTGWRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetCTGWA
+    Properties:
+      RouteTableId: !Ref SubnetCTGWRouteTableA
+      SubnetId: !Ref SubnetCTGWA
+      
+  SubnetCFirewallADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCC
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetCFirewallRouteTableA
+
+  SubnetCTGWADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InspectionFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !GetAtt InspectionFirewallVpceIds.FwVpceId1
+      RouteTableId: !Ref SubnetCTGWRouteTableA
+
+# Inspection VPC route table configuration: AZ B
+  SubnetCFirewallRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCC
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-c-firewall-route-table-b-${AWS::StackName}"
+
+  SubnetCTGWRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCC
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-c-tgw-route-table-b-${AWS::StackName}"
+          
+  SubnetCFirewallRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetCFirewallB
+    Properties:
+      RouteTableId: !Ref SubnetCFirewallRouteTableB
+      SubnetId: !Ref SubnetCFirewallB
+
+  SubnetCTGWRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetCTGWB
+    Properties:
+      RouteTableId: !Ref SubnetCTGWRouteTableB
+      SubnetId: !Ref SubnetCTGWB
+      
+  SubnetCFirewallADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCC
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetCFirewallRouteTableB
+
+  SubnetCTGWBDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InspectionFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !GetAtt InspectionFirewallVpceIds.FwVpceId2
+      RouteTableId: !Ref SubnetCTGWRouteTableB
+
+# Egress VPC route table configuration: AZ A
+  SubnetDFirewallRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-firewall-route-table-a-${AWS::StackName}"
+
+  SubnetDFirewallRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDFirewallA
+    Properties:
+      RouteTableId: !Ref SubnetDFirewallRouteTableA
+      SubnetId: !Ref SubnetDFirewallA
+
+  SubnetDFirewallAInternalRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCD
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetDFirewallRouteTableA
+      
+  SubnetDFirewallADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: SubnetDNATGatewayA
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref SubnetDNATGatewayA
+      RouteTableId: !Ref SubnetDFirewallRouteTableA
+ 
+  SubnetDPublicRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-public-route-table-a-${AWS::StackName}"
+
+  SubnetDPublicRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDPublicA
+    Properties:
+      RouteTableId: !Ref SubnetDPublicRouteTableA
+      SubnetId: !Ref SubnetDPublicA
+
+  SubnetDPublicAInternalRoute:
+    Type: AWS::EC2::Route
+    DependsOn: EgressFirewall
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      VpcEndpointId: !GetAtt EgressFirewallVpceIds.FwVpceId1
+      RouteTableId: !Ref SubnetDPublicRouteTableA
+      
+  SubnetDPublicADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayVPCD
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGatewayVPCD
+      RouteTableId: !Ref SubnetDPublicRouteTableA
+ 
+  SubnetDTGWRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-tgw-route-table-a-${AWS::StackName}"
+
+  SubnetDTGWRouteTableAAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDTGWA
+    Properties:
+      RouteTableId: !Ref SubnetDTGWRouteTableA
+      SubnetId: !Ref SubnetDTGWA
+    
+  SubnetDTGWADefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: EgressFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !GetAtt EgressFirewallVpceIds.FwVpceId1
+      RouteTableId: !Ref SubnetDTGWRouteTableA
+
+# Egress VPC route table configuration: AZ B
+  SubnetDFirewallRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-firewall-route-table-b-${AWS::StackName}"
+
+  SubnetDFirewallRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDFirewallB
+    Properties:
+      RouteTableId: !Ref SubnetDFirewallRouteTableB
+      SubnetId: !Ref SubnetDFirewallB
+
+  SubnetDFirewallBInternalRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachVPCD
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref TransitGateway
+      RouteTableId: !Ref SubnetDFirewallRouteTableB
+      
+  SubnetDFirewallBDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: SubnetDNATGatewayB
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref SubnetDNATGatewayB
+      RouteTableId: !Ref SubnetDFirewallRouteTableB
+ 
+  SubnetDPublicRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-public-route-table-b-${AWS::StackName}"
+
+  SubnetDPublicRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDPublicB
+    Properties:
+      RouteTableId: !Ref SubnetDPublicRouteTableB
+      SubnetId: !Ref SubnetDPublicB
+
+  SubnetDPublicBInternalRoute:
+    Type: AWS::EC2::Route
+    DependsOn: EgressFirewall
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      VpcEndpointId: !GetAtt EgressFirewallVpceIds.FwVpceId2
+      RouteTableId: !Ref SubnetDPublicRouteTableB
+      
+  SubnetDPublicBDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayVPCD
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGatewayVPCD
+      RouteTableId: !Ref SubnetDPublicRouteTableB
+ 
+  SubnetDTGWRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPCD
+      Tags:
+        - Key: Name
+          Value: !Sub "subnet-d-tgw-route-table-b-${AWS::StackName}"
+
+  SubnetDTGWRouteTableBAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetDTGWB
+    Properties:
+      RouteTableId: !Ref SubnetDTGWRouteTableB
+      SubnetId: !Ref SubnetDTGWB
+    
+  SubnetDTGWBDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: EgressFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !GetAtt EgressFirewallVpceIds.FwVpceId2
+      RouteTableId: !Ref SubnetDTGWRouteTableB
+
+# TransitGateway route table configuration:
+
+  SpokeRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      
+  FirewallRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "firewall-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref TransitGateway
+      
+  AssociateVPCARouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCA
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  AssociateVPCBRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCB
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  AssociateVPCCRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCC
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+      
+  AssociateVPCDRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachVPCD
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+
+  SpokeInspectionRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayAttachmentId: !Ref AttachVPCC
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+      
+  SpokeEgressRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayAttachmentId: !Ref AttachVPCD
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+      
+  FirewallSpokeARoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "10.1.0.0/16"
+      TransitGatewayAttachmentId: !Ref AttachVPCA
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+      
+  FirewallSpokeBRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "10.2.0.0/16"
+      TransitGatewayAttachmentId: !Ref AttachVPCB
+      TransitGatewayRouteTableId: !Ref FirewallRouteTable
+
+# Do not delete Outputs, required for triggering TGW applince mode custom resource:
+Outputs:
+  InspectionVpcApplianceModeStatus:
+    Description: Transit Gateway Inspection VPC Attachment Appliance Mode Status
+    Value: !GetAtt ApplianceModeEnabled.ApplianceModeStatus

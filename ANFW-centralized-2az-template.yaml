@@ -1325,9 +1325,3 @@ Resources:
       DestinationCidrBlock: "10.2.0.0/16"
       TransitGatewayAttachmentId: !Ref AttachVPCB
       TransitGatewayRouteTableId: !Ref FirewallRouteTable
-
-# Do not delete Outputs, required for triggering TGW applince mode custom resource:
-Outputs:
-  InspectionVpcApplianceModeStatus:
-    Description: Transit Gateway Inspection VPC Attachment Appliance Mode Status
-    Value: !GetAtt ApplianceModeEnabled.ApplianceModeStatus

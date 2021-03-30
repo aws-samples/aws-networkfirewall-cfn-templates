@@ -1068,7 +1068,7 @@ Resources:
       RouteTableId: !Ref SubnetCTGWRouteTableB
       SubnetId: !Ref SubnetCTGWB
       
-  SubnetCFirewallADefaultRoute:
+  SubnetCFirewallBDefaultRoute:
     Type: AWS::EC2::Route
     DependsOn: AttachVPCC
     Properties:

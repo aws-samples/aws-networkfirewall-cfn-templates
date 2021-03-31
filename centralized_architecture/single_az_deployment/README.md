@@ -7,16 +7,16 @@ For centralized deployment model, [AWS Transit Gateway](https://aws.amazon.com/t
 ![anfw-centralized-model-1az](images/anfw-centralized-model-1az.jpg)
 *Figure 1: Single AZ Centralized Architecture*
 
-[anfw-centralized-single-1az-template.yaml](anfw-centralized-1az-template.yaml) template, as described in Figure 1, creates dedicated
+[Centralized single AZ deployment template](anfw-centralized-1az-template.yaml) template, as described in Figure 1, creates dedicated
 
 * Inspection VPC for East-West (inter-vpc) traffic inspection. Inspection VPC consists of two subnets in single AZ:
-  1. Transit Gateway subnet for Transit Gateway attchment.
-  2. Firewall subnet for firewall endpoint.
+  * Transit Gateway subnet for Transit Gateway attchment.
+  * Firewall subnet for firewall endpoint.
 
 * Central Egress VPC for North-South (spoke VPCs to Internet) traffic inspection. Central Egress VPC consists of 3 subnets in single AZ: 
-  1. Transit Gateway subnet for Transit Gateway attchment.
-  2. Firewall subnet for firewall endpoint.
-  3. Public subnet for NAT Gateway.
+  * Transit Gateway subnet for Transit Gateway attchment.
+  * Firewall subnet for firewall endpoint.
+  * Public subnet for NAT Gateway.
 
 * Two Spoke VPCs.
 

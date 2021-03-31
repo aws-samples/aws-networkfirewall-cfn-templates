@@ -17,4 +17,4 @@ For return traffic, Ingress Route Table is associated with Internet Gateway to e
 
 This is a single AZ configuration. Use it for testing/POC. It is recommended to deploy resources in atleast 2 AZs. For multi AZ deployment refer to [Multi AZ Deployment](../README.md).
 
-For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)
+For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).

@@ -24,4 +24,4 @@ Each Transit Gateway subnet in each dedicated VPC requires a dedicated VPC route
 
 This is a Multi AZ configuration. Resources in Inpsection VPC and Centrall Egress VPC are provisioned across two AZs. You can also refer to [Single AZ Deployment](single_az_deployment) for testing/poc purpose only.
 
-For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)
+For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).

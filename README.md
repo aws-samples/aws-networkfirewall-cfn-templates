@@ -30,5 +30,6 @@ For more information about developing application using AWS CloudFormation, see 
 ### ***AWS Network Firewall Deployment Architectures:***
 * [Distributed Architecture](distributed_architecture)
 * [Centralized Architecture](centralized_architecture)
+* [CloudWatch Dashboard](cloudwatch_dashboard)
 
 

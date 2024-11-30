@@ -8,7 +8,7 @@ The repository contains AWS CloudFormation sample code for the following worksho
 
 * [Egress Inspection with AWS Cloud WAN and AWS Network Firewall](https://catalog.us-east-1.prod.workshops.aws/workshops/547dc923-8c8f-45b2-a772-f1c233e6864c/en-US)
 
-![Base Architecture](../static/images/Base_Architecture.png)
+![Base Architecture](../images/egress-inspection-aws-cloud-wan-base-architecture.png)
 
 * To run the workshop in your environment, visit [workshop](https://catalog.us-east-1.prod.workshops.aws/workshops/547dc923-8c8f-45b2-a772-f1c233e6864c/en-US) guide.
 

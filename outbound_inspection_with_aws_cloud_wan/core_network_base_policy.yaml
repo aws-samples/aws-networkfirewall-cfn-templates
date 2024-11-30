@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  Egress Inspection using AWS Cloud WAN and AWS Network Firewall. Templates creates 
+  AWS Cloud WAN global and core Network with core network base policy.
+
+Resources:
+  GlobalNetwork:
+    Type: AWS::NetworkManager::GlobalNetwork
+    Properties:
+      Description: Global Network - Egress Inspection Scenarios
+      Tags: 
+        - Key: Name
+          Value: cwanegress-inspection-global-network
+  
+  CoreNetwork:
+    Type: AWS::NetworkManager::CoreNetwork
+    Properties:
+      Description: Core Network - Egress Inspection Scenarios
+      GlobalNetworkId: !Ref GlobalNetwork
+      Tags: 
+        - Key: Name
+          Value: cwanegress-inspection-global-network
+      PolicyDocument: 
+        version: "2021.12"
+        core-network-configuration:
+          vpn-ecmp-support: true
+          asn-ranges:
+            - 64520-65525
+          edge-locations:
+            - location: us-east-2
+            - location: us-west-2
+        segments:
+          - name: Production
+            require-attachment-acceptance: false
+          - name: EgressInspection
+            require-attachment-acceptance: false
+        network-function-groups:
+          - name: EgressInspectionNFG
+            require-attachment-acceptance: false
+        attachment-policies:
+          - rule-number: 100
+            condition-logic: or
+            conditions:
+              - type: tag-exists
+                key: domain
+            action:
+              association-method: tag
+              tag-value-of-key: domain
+
+Outputs:
+  CoreNetworkId:
+    Description: Core Network ID.
+    Value: !GetAtt CoreNetwork.CoreNetworkId
+  CoreNetworkArn:
+    Description: Core Network ARN.
+    Value: !GetAtt CoreNetwork.CoreNetworkArn

@@ -30,6 +30,5 @@ For more information about developing application using AWS CloudFormation, see 
 ### ***AWS Network Firewall Deployment Architectures:***
 * [Distributed Architecture](distributed_architecture)
 * [Centralized Architecture](centralized_architecture)
+* [Egress Inspection with AWS Cloud WAN and AWS Network Firewall Workshop](outbound_inspection_with_aws_cloud_wan)
 * [CloudWatch Dashboard](cloudwatch_dashboard)
-
-

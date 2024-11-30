@@ -1,0 +1,1049 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  AWS Cloud WAN Egress Inspection Architecture - Region 1 resources
+Transform: 'AWS::LanguageExtensions'
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Cloud WAN Parameters
+        Parameters:
+          - CoreNetworkArn
+          - CoreNetworkId 
+      - Label:
+          default: EC2 Parameters
+        Parameters:
+          - InstanceType
+          - InstanceDiskSize
+          - LatestAmiId
+
+Parameters:
+  CoreNetworkArn:
+    Description: Cloud WAN Core Network ARN
+    Type: String
+    ConstraintDescription: Cloud WAN Core Network ARN of type string required
+  CoreNetworkId:
+    Description: Cloud WAN Core Network ID
+    Type: String
+    ConstraintDescription: Cloud WAN Core Network ID of type string required
+  InstanceType:
+    Description: >- 
+      EC2 instance type for the workload instance. Default is set to t2.micro
+    Default: t2.micro
+    Type: String
+    ConstraintDescription: Should be a valid EC2 instance type
+  InstanceDiskSize:
+    Description: EC2 instance disk size in GB. Default is set to 8GB
+    Default: 8
+    AllowedValues: [8]
+    Type: Number
+    ConstraintDescription: Should be a valid instance size in GB  
+  LatestAmiId:
+    Description: Latest EC2 AMI from Systems Manager Parameter Store
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+    ConstraintDescription: Must be a valid EC2 AMI from Systems Manager
+
+Resources:
+# ---------- Lambda Role ----------
+  IamRoleLambdaCFn:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Description: Provides permissions for Lambda functions.
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+  # ---------- End of Lambda Role ----------
+
+# ---------- Prod VPC 1 Resources ----------
+  # ---------- Prod VPC 1 ----------
+  ProdVPC1:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 10.1.0.0/16
+      Tags: 
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1"
+  
+  # ---------- Prod VPC 1 Subnets ----------
+  # CWAN Subnets:
+  ProdVPC1CWANSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: ProdVPC1
+      CidrBlock: 10.1.0.0/28
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-cwan-subnet1"
+
+  ProdVPC1CWANSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC1
+      CidrBlock: 10.1.0.16/28
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-cwan-subnet2"  
+  
+  # Endpoint Subnets:
+  ProdVPC1EndpointSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC1
+      CidrBlock: 10.1.0.32/28
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-subnet1"
+
+  ProdVPC1EndpointSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC1
+      CidrBlock: 10.1.0.48/28
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-subnet2"  
+
+  # Workload Subnets:
+  ProdVPC1WorkloadSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC1
+      CidrBlock: 10.1.1.0/24
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-subnet1"
+
+  ProdVPC1WorkloadSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref ProdVPC1
+      CidrBlock: 10.1.2.0/24
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-subnet2"
+
+  # ---------- Prod VPC 1 Route Tables and Subnet Associations ----------
+  # CWAN Route Tables:
+  ProdVPC1CWANRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-cwan-rtb1"
+  
+  ProdVPC1CWANRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-cwan-rtb2"  
+
+  # CWAN Route Tables Subnet Associations:
+  ProdVPC1CWANRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1CWANRTB1
+      SubnetId: !Ref ProdVPC1CWANSubnet1
+  
+  ProdVPC1CWANRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1CWANRTB2
+      SubnetId: !Ref ProdVPC1CWANSubnet2  
+
+  # Endpoint Route Tables:
+  ProdVPC1EndpointRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-rtb1"
+  
+  ProdVPC1EndpointRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-rtb2"  
+
+  # Endpoint Route Tables Subnet Associations:
+  ProdVPC1EndpointRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1EndpointRTB1
+      SubnetId: !Ref ProdVPC1EndpointSubnet1
+  
+  ProdVPC1EndpointRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1EndpointRTB2
+      SubnetId: !Ref ProdVPC1EndpointSubnet2
+
+  # Workload Route Tables:  
+  ProdVPC1WorkloadRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-rtb1"
+  
+  ProdVPC1WorkloadRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-rtb2"
+  
+  # Workload Route Tables Subnet Associations:
+  ProdVPC1WorkloadRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1WorkloadRTB1
+      SubnetId: !Ref ProdVPC1WorkloadSubnet1
+  
+  ProdVPC1WorkloadRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref ProdVPC1WorkloadRTB2
+      SubnetId: !Ref ProdVPC1WorkloadSubnet2
+
+  # ---------- AWS Cloud WAN attachment and default route----------
+  # Create Prod VPC 1 Cloud WAN Attachment:
+  ProdVPC1CWANAttachment:
+    Type: AWS::NetworkManager::VpcAttachment
+    Properties:
+      CoreNetworkId: !Ref CoreNetworkId
+      VpcArn: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${ProdVPC1}"
+      SubnetArns:
+        - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${ProdVPC1CWANSubnet1}"
+        - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${ProdVPC1CWANSubnet2}"
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-attachment"
+        - Key: domain
+          Value: Production
+
+  # Create default route in Workload route tables with Core Network ARN has the next hop:
+  ProdVPC1WorkloadRTB1DefaultRoute:
+    DependsOn:
+      - ProdVPC1CWANAttachment
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ProdVPC1WorkloadRTB1
+      DestinationCidrBlock: 0.0.0.0/0
+      CoreNetworkArn: !Ref CoreNetworkArn
+
+  ProdVPC1WorkloadRTB2DefaultRoute:
+    DependsOn: [ProdVPC1CWANAttachment]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref ProdVPC1WorkloadRTB2
+      DestinationCidrBlock: 0.0.0.0/0
+      CoreNetworkArn: !Ref CoreNetworkArn
+
+  # ---------- Create Security Groups ----------
+  # Create Workload SG:
+  ProdVPC1WorkloadSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Prod VPC 1 Workload EC2 Instance Security Group
+      GroupName: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-sg"
+      VpcId: !Ref ProdVPC1
+      SecurityGroupIngress:
+        - CidrIp: 10.0.0.0/8
+          Description: Allowing inbound connection from 10.0.0.0/8 CIDR.
+          IpProtocol: "-1"
+          FromPort: -1
+          ToPort: -1             
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allowing outbound connection to 0.0.0.0/0 CIDR.
+          IpProtocol: "-1"
+          FromPort: -1
+          ToPort: -1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-sg"
+
+  # Create EC2 instance connect endpoint SG:
+  ProdVPC1EndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Prod VPC 1 Endpoint Security Group
+      GroupName: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-sg"
+      VpcId: !Ref ProdVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-endpoint-sg"
+
+  ProdVPC1WorkloadSecurityGroupIngressEIC:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ProdVPC1WorkloadSecurityGroup
+      Description: Allowing inbound connenciton from EC2 Instance Connect (EIC).
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId: !Ref ProdVPC1EndpointSecurityGroup
+  
+  ProdVPC1EndpointSecurityGroupEgressEIC:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ProdVPC1EndpointSecurityGroup
+      Description: Allowing outbound connection to EC2 Instance Connect (EIC).
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      DestinationSecurityGroupId: !Ref ProdVPC1WorkloadSecurityGroup
+
+  # ---------- EC2 Instance Connect Endpoint ----------
+  ProdVPC1EICEndpoint:
+    Type: AWS::EC2::InstanceConnectEndpoint
+    Properties:
+      PreserveClientIp: false
+      SecurityGroupIds: 
+        - !Ref ProdVPC1EndpointSecurityGroup
+      SubnetId: !Ref ProdVPC1EndpointSubnet1
+      Tags: 
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-eic"
+
+  # ---------- Create Worload EC2 Intances ----------
+  # Workoad Instance 1:
+  ProdVPC1WorkloadInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType      
+      SubnetId: !Ref ProdVPC1WorkloadSubnet1
+      SecurityGroupIds:
+        - !Ref ProdVPC1WorkloadSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-instance1"
+      UserData:
+        Fn::Base64: |
+          cat <<EOF >> /home/ec2-user/usedatascript.sh
+          #!/bin/bash -ex
+          
+          # Install packages:
+          sudo yum update -y;
+          sudo yum install jq -y;
+          sudo yum install httpd -y;
+          sudo yum install htop -y;
+
+          # Enable and start httpd
+          sudo systemctl enable httpd;
+          sudo systemctl start httpd;
+
+          # Configure hostname:
+          sudo hostnamectl set-hostname prod-vpc1-workload-${AvailabilityZone};
+          
+          # Configure SSH client alive interval for ssh session timeout:
+          echo 'ClientAliveInterval 60' | sudo tee --append /etc/ssh/sshd_config;
+          service sshd restart;
+          
+          # Set dark background for vim:
+          touch /home/ec2-user/.vimrc;
+          echo "set background=dark" >> /home/ec2-user/.vimrc;
+
+          # Define variables:
+          curl --silent http://169.254.169.254/latest/dynamic/instance-identity/document > /home/ec2-user/iid;
+          export instance_interface=$(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/);
+          export instance_vpcid=$(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/$instance_interface/vpc-id);
+          export instance_az=$(cat /home/ec2-user/iid |grep 'availability' | awk -F': ' '{print $2}' | awk -F',' '{print $1}');
+          export instance_ip=$(cat /home/ec2-user/iid |grep 'privateIp' | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | awk -F'"' '{print$2}');
+          export instance_region=$(cat /home/ec2-user/iid |grep 'region' | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | awk -F'"' '{print$2}');
+          EOT
+
+          # Add index.html
+          touch /var/www/html/index.html;
+          cat <<EOT >> /var/www/html/index.html
+          <html>
+            <head>
+              <title>Prod VPC 1 Workload Instance 1</title>
+              <meta http-equiv='Content-Type' content='text/html; charset=ISO-8859-1'>
+            </head>
+            <body>
+              <h1>Welcome to AWS Cloud WAN Egress Inspection Architecture POC:</h1>
+              <h2>This is a simple web server running in $instance_az in $instance_region. Happy Testing!</h2>
+            </body>
+          </html>
+          EOT
+
+  # Workoad Instance 2:
+  ProdVPC1WorkloadInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType      
+      SubnetId: !Ref ProdVPC1WorkloadSubnet2
+      SecurityGroupIds:
+        - !Ref ProdVPC1WorkloadSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-prod-vpc1-workload-instance2"
+      UserData:
+        Fn::Base64: |
+          cat <<EOF >> /home/ec2-user/usedatascript.sh
+          #!/bin/bash -ex
+          
+          # Install packages:
+          sudo yum update -y;
+          sudo yum install jq -y;
+          sudo yum install httpd -y;
+          sudo yum install htop -y;
+
+          # Enable and start httpd
+          sudo systemctl enable httpd;
+          sudo systemctl start httpd;
+
+          # Configure hostname:
+          sudo hostnamectl set-hostname prod-vpc1-workload-${AvailabilityZone};
+          
+          # Configure SSH client alive interval for ssh session timeout:
+          echo 'ClientAliveInterval 60' | sudo tee --append /etc/ssh/sshd_config;
+          service sshd restart;
+          
+          # Set dark background for vim:
+          touch /home/ec2-user/.vimrc;
+          echo "set background=dark" >> /home/ec2-user/.vimrc;
+
+          # Define variables:
+          curl --silent http://169.254.169.254/latest/dynamic/instance-identity/document > /home/ec2-user/iid;
+          export instance_interface=$(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/);
+          export instance_vpcid=$(curl --silent http://169.254.169.254/latest/meta-data/network/interfaces/macs/$instance_interface/vpc-id);
+          export instance_az=$(cat /home/ec2-user/iid |grep 'availability' | awk -F': ' '{print $2}' | awk -F',' '{print $1}');
+          export instance_ip=$(cat /home/ec2-user/iid |grep 'privateIp' | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | awk -F'"' '{print$2}');
+          export instance_region=$(cat /home/ec2-user/iid |grep 'region' | awk -F': ' '{print $2}' | awk -F',' '{print $1}' | awk -F'"' '{print$2}');
+          EOT
+
+          # Add index.html
+          touch /var/www/html/index.html;
+          cat <<EOT >> /var/www/html/index.html
+          <html>
+            <head>
+              <title>Prod VPC 1 Workload Instance 2</title>
+              <meta http-equiv='Content-Type' content='text/html; charset=ISO-8859-1'>
+            </head>
+            <body>
+              <h1>Welcome to AWS Cloud WAN Egress Inspection Architecture POC:</h1>
+              <h2>This is a simple web server running in $instance_az in $instance_region. Happy Testing!</h2>
+            </body>
+          </html>
+          EOT
+  
+  # ---------- End of Prod VPC 1 Resources ----------
+
+# ---------- Inspection VPC 1 Resources ----------
+  # ---------- Inspection VPC 1 ----------
+  InspectionVPC1:
+    Type: AWS::EC2::VPC
+    Properties: 
+      CidrBlock: 100.64.1.0/24
+      Tags: 
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1"
+
+  # ---------- Inspection VPC 1 IGW and IGW Attachment----------
+  InspectionVPC1IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: 
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-igw"
+  
+  InspectionVPC1IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InspectionVPC1IGW
+      VpcId: !Ref InspectionVPC1
+  
+  # ---------- Inspection VPC 1 Subnets ----------
+  # CWAN Subnets:
+  InspectionVPC1CWANSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.0/28
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: !Ref AWS::Region
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-cwan-subnet1"
+
+  InspectionVPC1CWANSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.16/28
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-cwan-subnet2"  
+  
+  # Firewall Endpoint Subnets:
+  InspectionVPC1FirewallSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.32/28
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-fwe-subnet1"
+
+  InspectionVPC1FirewallSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.48/28
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-fwe-subnet2"  
+
+  # Public Subnets:
+  InspectionVPC1PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.64/28
+      AvailabilityZone: !Select [0, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-public-subnet1"
+
+  InspectionVPC1PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      CidrBlock: 100.64.1.80/28
+      AvailabilityZone: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-public-subnet2"
+
+  # ---------- Inspection VPC 1 Route Tables and Subnet Associations ----------
+  # CWAN Route Tables:
+  InspectionVPC1CWANRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-cwan-rtb1"
+  
+  InspectionVPC1CWANRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-cwan-rtb2"  
+
+  # CWAN Route Tables Subnet Associations:
+  InspectionVPC1CWANRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1CWANRTB1
+      SubnetId: !Ref InspectionVPC1CWANSubnet1
+  
+  InspectionVPC1CWANRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1CWANRTB2
+      SubnetId: !Ref InspectionVPC1CWANSubnet2  
+
+  # Firewall Endpoint Route Tables:
+  InspectionVPC1FirewallRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-fwe-rtb1"
+  
+  InspectionVPC1FirewallRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-fwe-rtb2"  
+
+  # Firewall Endpoint Route Tables Subnet Associations:
+  InspectionVPC1FirewallRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB1
+      SubnetId: !Ref InspectionVPC1FirewallSubnet1
+  
+  InspectionVPC1FirewallRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB2
+      SubnetId: !Ref InspectionVPC1FirewallSubnet2
+
+  # Public Route Tables:  
+  InspectionVPC1PublicRTB1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-public-rtb1"
+  
+  InspectionVPC1PublicRTB2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InspectionVPC1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-public-rtb2"
+  
+  # Public Route Tables Subnet Associations:
+  InspectionVPC1PublicRTB1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB1
+      SubnetId: !Ref InspectionVPC1PublicSubnet1
+  
+  InspectionVPC1PublicRTB2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB2
+      SubnetId: !Ref InspectionVPC1PublicSubnet2
+
+  # ---------- Inspection VPC 1 NAT Gateways and EIPs ----------
+  # NAT Gateway 1:
+  InspectionVPC1NATGW1EIP1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  InspectionVPC1NATGW1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt InspectionVPC1NATGW1EIP1.AllocationId
+      SubnetId: !Ref InspectionVPC1PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-natgw1"
+
+  # NAT Gateway 2:
+  InspectionVPC1NATGW1EIP2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  InspectionVPC1NATGW2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt InspectionVPC1NATGW1EIP2.AllocationId
+      SubnetId: !Ref InspectionVPC1PublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-natgw2"
+
+  # ---------- AWS Network Firewall (ANFW) and related resources ----------
+  # Network Firewall resource
+  InspectionVPC1Anfw1:
+    DependsOn: [InspectionVPC1Anfw1RulesPolicy1]
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1"
+      FirewallPolicyArn: !GetAtt InspectionVPC1Anfw1RulesPolicy1.FirewallPolicyArn
+      VpcId: !Ref InspectionVPC1
+      SubnetMappings:
+        - SubnetId: !Ref InspectionVPC1FirewallSubnet1
+        - SubnetId: !Ref InspectionVPC1FirewallSubnet2
+  
+  # Firewall Policy
+  InspectionVPC1Anfw1RulesPolicy1:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - aws:forward_to_sfe
+        StatelessFragmentDefaultActions:
+          - aws:forward_to_sfe
+        StatelessRuleGroupReferences:
+          - Priority: 10
+            ResourceArn: !GetAtt InspectionVPC1Anfw1StatelessDropRemoteRuleGroup.RuleGroupArn
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+        StatefulDefaultActions:
+          - aws:drop_established
+          - aws:alert_established
+        StatefulRuleGroupReferences:
+          - ResourceArn: !GetAtt InspectionVPC1Anfw1DomainListStatefulAllowRuleGroup.RuleGroupArn
+            Priority: 100
+          - ResourceArn: !GetAtt InspectionVPC1Anfw1StandardStatefulRuleGroup.RuleGroupArn
+            Priority: 200            
+            
+      FirewallPolicyName: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-policy1"
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-firewall-policy-v1"   
+  
+  # Stateless Rule Group - Dropping any SSH connection
+  InspectionVPC1Anfw1StatelessDropRemoteRuleGroup:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      Capacity: 100
+      RuleGroupName: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-dropremote-rg"
+      Description: Drop remote SSH connections
+      Type: STATELESS
+      RuleGroup:
+        RulesSource:
+          StatelessRulesAndCustomActions:
+            StatelessRules:
+              - Priority: 1
+                RuleDefinition:
+                  MatchAttributes:
+                    Protocols:
+                      - 6
+                    Sources:
+                      - AddressDefinition: 0.0.0.0/0
+                    SourcePorts:
+                      - FromPort: 22
+                        ToPort: 22
+                    Destinations:
+                      - AddressDefinition: 0.0.0.0/0
+                    DestinationPorts:
+                      - FromPort: 22
+                        ToPort: 22
+                  Actions:
+                    - "aws:drop"
+
+  # Domain list Stateful Rule Group:
+  InspectionVPC1Anfw1DomainListStatefulAllowRuleGroup:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      Capacity: 100
+      RuleGroupName: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-domain-allow-rg"
+      Description: Allowing access to desired domains
+      Type: STATEFUL
+      RuleGroup:
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+        RuleVariables:
+          IPSets:
+            HOME_NET:
+              Definition:
+                - "10.0.0.0/8"
+        RulesSource:
+          RulesSourceList:
+            TargetTypes:
+              - HTTP_HOST
+              - TLS_SNI
+            Targets: 
+              - ".amazon.com"
+              - ".amazonaws.com"
+              - ".google.com"
+            GeneratedRulesType: "ALLOWLIST"
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-domain-allow-rg"
+
+  # Standard Stateful Rule Group:
+  InspectionVPC1Anfw1StandardStatefulRuleGroup:
+    Type: AWS::NetworkFirewall::RuleGroup
+    Properties:
+      RuleGroupName: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-standard-stateful-rg"
+      Type: STATEFUL
+      Capacity: 100
+      RuleGroup:
+        StatefulRuleOptions:
+            RuleOrder: STRICT_ORDER
+        RuleVariables:
+          IPSets:
+            HOME_NET:
+              Definition:
+                - "10.0.0.0/8"            
+        RulesSource:
+          StatefulRules:
+            - Action: ALERT
+              Header:
+                Direction: ANY
+                Protocol: ICMP
+                Destination: ANY
+                Source: $HOME_NET
+                DestinationPort: ANY
+                SourcePort: ANY
+              RuleOptions:
+                - Keyword: "sid:10001"
+            - Action: PASS
+              Header:
+                Direction: ANY
+                Protocol: ICMP
+                Destination: ANY
+                Source: $HOME_NET
+                DestinationPort: ANY
+                SourcePort: ANY
+              RuleOptions:
+                - Keyword: "sid:10002"
+            - Action: ALERT
+              Header:
+                Direction: ANY
+                Protocol: UDP
+                Destination: ANY
+                Source: $HOME_NET
+                DestinationPort: ANY
+                SourcePort: ANY
+              RuleOptions:
+                - Keyword: "sid:20001"
+            - Action: PASS
+              Header:
+                Direction: ANY
+                Protocol: UDP
+                Destination: ANY
+                Source: $HOME_NET
+                DestinationPort: ANY
+                SourcePort: ANY
+              RuleOptions:
+                - Keyword: "sid:20002"                             
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-anfw1-standard-stateful-rg"
+
+  # Firewall Logs - Flow
+  InspectionVPC1Anfw1LogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/anfw1/flow/cwanegress/${AWS::Region}"
+
+  # Firewall Logs - Aler
+  InspectionVPC1Anfw1LogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/anfw1/alert/cwanegress/${AWS::Region}"
+
+  # Firewall Log - Policy reference
+  InspectionVPC1Anfw1Log:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref InspectionVPC1Anfw1
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/anfw1/flow/cwanegress/${AWS::Region}"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/anfw1/alert/cwanegress/${AWS::Region}"
+
+  # ---------- Lambda and Custom Resource to retrieve ANFW Endpoint IDs ----------
+  # CloudWatch Log Group for DescribeVpceIdLambda Function:
+  DescribeVpceIdLambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        LogGroupName: !Sub "/aws/lambda/cwanegress-${AWS::Region}-DescribeVpceId"
+  
+  # Lambda Function to retrieve ANFW Endpoint IDs:
+  DescribeVpceIdLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: DescribeVpceIdLambdaLogGroup
+    Properties:
+      FunctionName: !Sub "cwanegress-${AWS::Region}-DescribeVpceId"
+      Handler: "index.handler"
+      Role: !GetAtt IamRoleLambdaCFn.Arn
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import logging
+
+          def handler(event, context):
+              logger = logging.getLogger()
+              logger.setLevel(logging.INFO)
+
+              responseData = {}
+              responseStatus = cfnresponse.FAILED
+
+              eventinfo = json.dumps(event)
+              logger.info(f"Received event: {eventinfo}")
+
+              if event["RequestType"] == "Delete":
+                  responseStatus = cfnresponse.SUCCESS
+                  cfnresponse.send(event, context, responseStatus, responseData, "CustomResourcePhysicalID")
+              if event["RequestType"] == "Create":
+                  try:
+                      Az1 = event["ResourceProperties"]["Az1"]
+                      Az2 = event["ResourceProperties"]["Az2"]
+                      FwArn = event["ResourceProperties"]["FwArn"]
+                  except Exception as e:
+                      logger.info(f"AZ retrieval failure: {e}")
+
+                  try:
+                      nfw = boto3.client('network-firewall')
+                  except Exception as e:
+                      logger.info(f"boto3.client failure: {e}")
+
+                  try:
+                      NfwResponse=nfw.describe_firewall(FirewallArn=FwArn)
+                      VpceId1 = NfwResponse['FirewallStatus']['SyncStates'][Az1]['Attachment']['EndpointId']
+                      VpceId2 = NfwResponse['FirewallStatus']['SyncStates'][Az2]['Attachment']['EndpointId']
+                  except Exception as e:
+                      logger.info(f"ec2.describe_firewall failure: {e}")
+
+                  responseData['FwVpceId1'] = VpceId1
+                  responseData['FwVpceId2'] = VpceId2
+                  responseStatus = cfnresponse.SUCCESS
+                  print(f"VPCE ID1: {VpceId1}")
+                  print(f"VPCE ID2: {VpceId2}")
+                  print(f"response data: {responseData}")
+                  cfnresponse.send(event, context, responseStatus, responseData)
+      Runtime: python3.12
+      Timeout: 900
+
+  # Custom resource to retrieve ANFW Endpoint IDs using Lambda function created above:
+  RetrieveInspectionVPC1AnfwVpceIds:
+    Type: Custom::DescribeVpcEndpoints
+    Properties:
+      ServiceToken: !GetAtt DescribeVpceIdLambda.Arn
+      Az1: !Select [0, Fn::GetAZs: !Ref AWS::Region]
+      Az2: !Select [1, Fn::GetAZs: !Ref AWS::Region]
+      FwArn: !Ref InspectionVPC1Anfw1
+
+  # ---------- AWS Cloud WAN attachment ----------
+  # Create Inspection VPC 1 Cloud WAN Attachment:
+  InspectionVPC1CWANAttachment:
+    Type: AWS::NetworkManager::VpcAttachment
+    Properties:
+      CoreNetworkId: !Ref CoreNetworkId
+      VpcArn: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:vpc/${InspectionVPC1}"
+      SubnetArns:
+        - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${InspectionVPC1CWANSubnet1}"
+        - !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:subnet/${InspectionVPC1CWANSubnet2}"
+      Tags:
+        - Key: Name
+          Value: !Sub "cwanegress-${AWS::Region}-insp-vpc1-attachment"
+        - Key: domain
+          Value: EgressInspection
+
+  # ---------- Add Routes ----------
+  # Create default route in CWAN route tables with ANFW endpoints as the next hop:
+  InspectionVPC1CWANRTB1DefaultRoute:
+    DependsOn: [InspectionVPC1Anfw1]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1CWANRTB1
+      DestinationCidrBlock: 0.0.0.0/0
+      VpcEndpointId: !GetAtt RetrieveInspectionVPC1AnfwVpceIds.FwVpceId1
+
+  InspectionVPC1CWANRTB2DefaultRoute:
+    DependsOn: [InspectionVPC1Anfw1]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1CWANRTB2
+      DestinationCidrBlock: 0.0.0.0/0
+      VpcEndpointId: !GetAtt RetrieveInspectionVPC1AnfwVpceIds.FwVpceId2
+
+  # Create default route in ANFW route tables with NAT Gateway as the next hop:
+  InspectionVPC1FirewallRTB1DefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB1
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref InspectionVPC1NATGW1
+
+  InspectionVPC1FirewallRTB2DefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB2
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref InspectionVPC1NATGW2
+
+  # Create summary route in ANFW route tables with Core Network ARN as the next hop:
+  InspectionVPC1FirewallRTB1SummaryRoute:
+    DependsOn: [InspectionVPC1CWANAttachment]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB1
+      DestinationCidrBlock: 10.0.0.0/8
+      CoreNetworkArn: !Ref CoreNetworkArn
+
+  InspectionVPC1FirewallRTB2SummaryRoute:
+    DependsOn: [InspectionVPC1CWANAttachment]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1FirewallRTB2
+      DestinationCidrBlock: 10.0.0.0/8
+      CoreNetworkArn: !Ref CoreNetworkArn
+
+  # Create default route in Public route tables with Internet Gateway as the next hop:
+  InspectionVPC1PublicRTB1DefaultRoute:
+    DependsOn: [InspectionVPC1IGWAttachment]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB1
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InspectionVPC1IGW
+
+  InspectionVPC1PublicRTB2DefaultRoute:
+    DependsOn: [InspectionVPC1IGWAttachment]
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB2
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InspectionVPC1IGW
+
+  # Create summary route in Public route tables with firewall endpoint as the next hop:
+  InspectionVPC1PublicRTB1SummaryRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB1
+      DestinationCidrBlock: 10.0.0.0/8
+      VpcEndpointId: !GetAtt RetrieveInspectionVPC1AnfwVpceIds.FwVpceId1
+
+  InspectionVPC1PublicRTB2SummaryRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref InspectionVPC1PublicRTB2
+      DestinationCidrBlock: 10.0.0.0/8
+      VpcEndpointId: !GetAtt RetrieveInspectionVPC1AnfwVpceIds.FwVpceId2
+  
+  # ---------- End of Inspection VPC 1 Resources ----------

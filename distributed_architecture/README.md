@@ -1,21 +1,44 @@
 # Distributed Architecture
 
-**Template File:** [anfw-distributed-2az-template.yaml](anfw-distributed-2az-template.yaml)
+The distributed deployment model deploys AWS Network Firewall into each VPC that requires protection. Each VPC is protected individually, reducing blast radius through VPC isolation. This model doesn't require connectivity to other VPCs or AWS Transit Gateway, allowing independent management of each firewall.
 
-For the distributed deployment model, we deploy AWS Network Firewall into each VPC which requires protection. Each VPC is protected individually and blast radius is reduced through VPC isolation. Each VPC does not require connectivity to any other VPC or AWS Transit Gateway. Each AWS Network Firewall can have its own firewall policy or share a policy through common rule groups (reusable collections of rules) across multiple firewalls. This allows each AWS Network Firewall to be managed independently, which reduces the possibility of misconfiguration and limits the scope of impact.
+## Available Templates
 
-![anfw-distributed-model-2az](../images/anfw-distributed-model-2az.jpg)
-*Figure 1: Multi AZ Distributed Architecture*
+This folder contains templates organized by deployment configuration:
 
-[Distributed multi AZ deployment template](anfw-distributed-2az-template.yaml), as described in Figure 1, creates:
+### [Single AZ Deployment](single_az_deployment/)
+- **Use Case:** Testing and proof-of-concept environments
+- **Resources:** All components deployed in a single Availability Zone
+- **Templates:** Combined and separate ingress/egress firewall options
 
-* Spoke VPC. Spoke VPC consists of three subnets in each AZ:
-  * Private subnet for application/client.
-  * Public subnet for NAT Gateway.
-  * Firewall subnet for firewall endpoint.
+### [Two AZ Deployment](two_az_deployment/)
+- **Use Case:** Environments requiring high availability
+- **Resources:** Components distributed across two Availability Zones
+- **Templates:** Combined and separate ingress/egress firewall options
 
-For return traffic, Ingress Route Table is associated with Internet Gateway to ensure the traffic is forwarded to firewall endpoint within the same AZ. This route tables has public subnet route pointing towards firewall endpoint in the same AZ.
+## Template Variations
 
-This is a Multi AZ configuration. You can also refer to [Single AZ Deployment](single_az_deployment) for testing/poc purpose only.
+Each deployment option includes two firewall configuration approaches:
 
-For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).
+**Combined Ingress and Egress Firewall**
+- Single firewall handles both inbound and outbound traffic
+- Resources require public IP addresses (no NAT Gateway)
+- Simplified architecture with fewer resources
+- Cost-optimized for most use cases
+
+**Separate Ingress and Egress Firewall**
+- Dedicated firewalls for inbound and outbound traffic
+- Resources can remain private (includes NAT Gateway)
+- Network Load Balancer provides public IP for ingress to private resources
+
+## Architecture Benefits
+
+- **VPC Isolation** - Each VPC protected independently
+- **Reduced Blast Radius** - Misconfigurations limited to single VPC
+- **Independent Management** - Each firewall managed separately
+- **Policy Flexibility** - Unique policies per VPC or shared rule groups
+- **No Transit Gateway Required** - Simplified network architecture
+
+## Additional Resources
+
+For detailed information about AWS Network Firewall deployment models, refer to the [AWS Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).

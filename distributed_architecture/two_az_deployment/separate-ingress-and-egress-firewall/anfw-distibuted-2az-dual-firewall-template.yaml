@@ -1,0 +1,1241 @@
+#Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+#FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+#COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+#IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+#CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS Network Firewall Demo - Dual Firewall Architecture with Separate Ingress/Egress Firewalls - 2 AZ Deployment"
+
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: "VPC Parameters"
+        Parameters: 
+          - AvailabilityZone1Selection
+          - AvailabilityZone2Selection
+      - Label:
+          default: "EC2 Parameters"
+        Parameters: 
+          - LatestAmiId
+
+Parameters:
+  AvailabilityZone1Selection:
+    Description: First Availability Zone
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  AvailabilityZone2Selection:
+    Description: Second Availability Zone
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+
+  LatestAmiId:
+    Description: Latest EC2 AMI from Systems Manager Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+      
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.2.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+  # Private Subnets - EC2 instances (no public IPs) - AZ1 and AZ2
+  PrivateSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet-az1"
+
+  PrivateSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.4.0/24"
+      AvailabilityZone: !Ref AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet-az2"
+
+  # Network Load Balancer Subnets - AZ1 and AZ2
+  NLBSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.2.0/24"
+      AvailabilityZone: !Ref AvailabilityZone1Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-subnet-az1"
+
+  NLBSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.5.0/24"
+      AvailabilityZone: !Ref AvailabilityZone2Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-subnet-az2"
+
+  # NAT Gateway Subnets (separate from NLB subnets) - AZ1 and AZ2
+  NATSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.3.0/24"
+      AvailabilityZone: !Ref AvailabilityZone1Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-subnet-az1"
+
+  NATSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.6.0/24"
+      AvailabilityZone: !Ref AvailabilityZone2Selection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-subnet-az2"
+
+  # Ingress Firewall Subnets - AZ1 and AZ2
+  IngressFirewallSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.16.0/28"
+      AvailabilityZone: !Ref AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall-subnet-az1"
+
+  IngressFirewallSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.18.0/28"
+      AvailabilityZone: !Ref AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall-subnet-az2"
+
+  # Egress Firewall Subnets - AZ1 and AZ2
+  EgressFirewallSubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.17.0/28"
+      AvailabilityZone: !Ref AvailabilityZone1Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall-subnet-az1"
+
+  EgressFirewallSubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.19.0/28"
+      AvailabilityZone: !Ref AvailabilityZone2Selection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall-subnet-az2"
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateways - AZ1 and AZ2
+  NATGatewayEIPAZ1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw-eip-az1"
+
+  NATGatewayAZ1:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIPAZ1.AllocationId
+      SubnetId: !Ref NATSubnetAZ1
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw-az1"
+
+  NATGatewayEIPAZ2:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw-eip-az2"
+
+  NATGatewayAZ2:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIPAZ2.AllocationId
+      SubnetId: !Ref NATSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw-az2"
+  # VPC Endpoints for SSM (in private subnets)
+  VPCEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow instances to get to SSM Systems Manager
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.2.0.0/16
+          Description: "Allow HTTPS traffic from Spoke B VPC for SSM access"
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      PrivateDnsEnabled: true
+      SecurityGroupIds: 
+        - !Ref VPCEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      SubnetIds: 
+        - !Ref PrivateSubnetAZ1
+        - !Ref PrivateSubnetAZ2
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      PrivateDnsEnabled: true
+      SecurityGroupIds: 
+        - !Ref VPCEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      SubnetIds: 
+        - !Ref PrivateSubnetAZ1
+        - !Ref PrivateSubnetAZ2
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      PrivateDnsEnabled: true
+      SecurityGroupIds: 
+        - !Ref VPCEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      SubnetIds: 
+        - !Ref PrivateSubnetAZ1
+        - !Ref PrivateSubnetAZ2
+      VpcEndpointType: Interface
+      VpcId: !Ref VPC
+  # IAM Role for EC2 instances
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: "anfw-2az-ec2-role"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref EC2Role
+
+  # Security Groups
+  PrivateInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for private EC2 instances"
+      GroupName: "anfw-2az-private-instance-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref NLBSecurityGroup
+          Description: "HTTP from NLB"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          SourceSecurityGroupId: !Ref NLBSecurityGroup
+          Description: "HTTPS from NLB"
+        - IpProtocol: icmp
+          CidrIp: 10.2.0.0/16
+          Description: "ICMP from VPC"
+          FromPort: "-1"
+          ToPort: "-1"
+
+  NLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      checkov:
+        skip:
+          - id: "CKV_AWS_260"
+            comment: "Ensure no security groups allow ingress from 0.0.0.0:0 to port 80"
+    Properties:
+      GroupDescription: "Security group for Network Load Balancer"
+      GroupName: "anfw-2az-nlb-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP from internet"
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: "HTTPS from internet"
+
+  # Private EC2 Instances - AZ1 and AZ2
+  PrivateInstanceAZ1a:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressNetworkFirewall
+      - EgressNetworkFirewall
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PrivateSubnetAZ1
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref PrivateInstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Private Instance AZ1-1 - ${AWS::StackName}</h1>" > /var/www/html/index.html
+          echo "<p>Ingress: IGW -> Ingress Firewall -> NLB -> Instance</p>" >> /var/www/html/index.html
+          echo "<p>Egress: Instance -> Egress Firewall -> NAT Gateway -> IGW</p>" >> /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-instance-az1-1"
+
+  PrivateInstanceAZ1b:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressNetworkFirewall
+      - EgressNetworkFirewall
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PrivateSubnetAZ1
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref PrivateInstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Private Instance AZ1-2 - ${AWS::StackName}</h1>" > /var/www/html/index.html
+          echo "<p>Ingress: IGW -> Ingress Firewall -> NLB -> Instance</p>" >> /var/www/html/index.html
+          echo "<p>Egress: Instance -> Egress Firewall -> NAT Gateway -> IGW</p>" >> /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-instance-az1-2"
+
+  PrivateInstanceAZ2a:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressNetworkFirewall
+      - EgressNetworkFirewall
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PrivateSubnetAZ2
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref PrivateInstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Private Instance AZ2-1 - ${AWS::StackName}</h1>" > /var/www/html/index.html
+          echo "<p>Ingress: IGW -> Ingress Firewall -> NLB -> Instance</p>" >> /var/www/html/index.html
+          echo "<p>Egress: Instance -> Egress Firewall -> NAT Gateway -> IGW</p>" >> /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-instance-az2-1"
+
+  PrivateInstanceAZ2b:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressNetworkFirewall
+      - EgressNetworkFirewall
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PrivateSubnetAZ2
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref PrivateInstanceSecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Private Instance AZ2-2 - ${AWS::StackName}</h1>" > /var/www/html/index.html
+          echo "<p>Ingress: IGW -> Ingress Firewall -> NLB -> Instance</p>" >> /var/www/html/index.html
+          echo "<p>Egress: Instance -> Egress Firewall -> NAT Gateway -> IGW</p>" >> /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-instance-az2-2"
+  # Network Load Balancer (in dedicated NLB subnets across both AZs)
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: "anfw-2az-nlb"
+      Type: network
+      Scheme: internet-facing
+      Subnets:
+        - !Ref NLBSubnetAZ1
+        - !Ref NLBSubnetAZ2
+      SecurityGroups:
+        - !Ref NLBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb"
+
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: "anfw-2az-nlb-tg"
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VPC
+      TargetType: instance
+      Targets:
+        - Id: !Ref PrivateInstanceAZ1a
+          Port: 80
+        - Id: !Ref PrivateInstanceAZ1b
+          Port: 80
+        - Id: !Ref PrivateInstanceAZ2a
+          Port: 80
+        - Id: !Ref PrivateInstanceAZ2b
+          Port: 80
+      HealthCheckProtocol: TCP
+      HealthCheckPort: 80
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-tg"
+
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 80
+      Protocol: TCP
+  # Network Firewall Rule Groups
+  
+  EgressAllowListExampleRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: egress-allow-list-example-rule-group
+      Type: STATEFUL
+      RuleGroup:
+        RulesSource:
+          RulesString: |
+            # This is a "Strict rule ordering" egress security template meant only for the egress use case.
+            # Do NOT use with "Drop All" or "Drop Established"
+            # Visit https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/ for all the best practices
+            
+            # Block, but do not log any ingress traffic
+            drop ip any any -> $HOME_NET any (msg:"Ingress traffic to HOME_NET Blocked"; flow:to_server; sid:98228398;)
+
+            # Silently allow TCP 3-way handshake to be setup by $HOME_NET clients
+            pass tcp $HOME_NET any -> any any (flow:not_established, to_server; msg:"pass rules do not alert/log"; sid:9918156;)
+            pass tcp any any -> $HOME_NET any (flow:not_established, to_client; msg:"pass rules do not alert/log"; sid:9918199;)
+
+            # Silently (do not log) allow low risk protocols out to anywhere
+            pass ntp $HOME_NET any -> any 123 (flow:to_server; msg:"pass rules do not alert/log"; sid:9829158;)
+
+            # Alert on risky geos
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to RU"; flow:to_server; geoip:dst,RU; metadata:geo RU; sid:8733172;)
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to CN"; flow:to_server; geoip:dst,CN; metadata:geo CN; sid:873381;)
+
+            # Block high risk TLDs
+            reject tls $HOME_NET any -> any any (tls.sni; content:".ru"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:20233181;)
+            reject http $HOME_NET any -> any any (http.host; content:".ru"; msg:"High risk TLD blocked"; flow:to_server; sid:20235181;)
+            reject tls $HOME_NET any -> any any (tls.sni; content:".xyz"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:20232181;)
+            reject http $HOME_NET any -> any any (http.host; content:".xyz"; msg:"High risk TLD blocked"; flow:to_server; sid:20235281;)
+            reject tls $HOME_NET any -> any any (tls.sni; content:".info"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:10233181;)
+            reject http $HOME_NET any -> any any (http.host; content:".info"; msg:"High risk TLD blocked"; flow:to_server; sid:10235181;)
+            reject tls $HOME_NET any -> any any (tls.sni; content:".onion"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:23233181;)
+            reject http $HOME_NET any -> any any (http.host; content:".onion"; msg:"High risk TLD blocked"; flow:to_server; sid:20335181;)
+
+            # Silently (do not log) allow AWS public service endpoints that we have not setup VPC endpoints for yet
+            # VPC endpoints are highly encouraged. They reduce NFW data processing costs and allow for additional security features like VPC endpoint policies.
+            pass tls $HOME_NET any -> any any (tls.sni; content:"ec2messages."; startswith; nocase; content:".amazonaws.com"; endswith; nocase; flow:to_server; sid:20231181;)
+            pass tls $HOME_NET any -> any any (tls.sni; content:"ssm."; startswith; nocase; content:".amazonaws.com"; endswith; nocase; flow:to_server; sid:2023116132;)
+            pass tls $HOME_NET any -> any any (tls.sni; content:"ssmmessages."; startswith; nocase; content:".amazonaws.com"; endswith; nocase; flow:to_server; sid:2021110133;)
+
+            # Allow-list of strict FQDNs to silently allow
+            pass tls $HOME_NET any -> any any (tls.sni; content:"checkip.amazonaws.com"; startswith; nocase; endswith; flow:to_server; sid:202311893;)
+            pass http $HOME_NET any -> any any (http.host; content:"checkip.amazonaws.com"; startswith; endswith; flow:to_server; sid:20236893;)
+
+            # Allow-List of strict FQDNs, but still alert on them
+            alert tls $HOME_NET any -> any any (tls.sni; content:"www.example.com"; startswith; nocase; endswith; flow:to_server; msg:"TLS SNI Allowed"; sid:202315893;)
+            pass tls $HOME_NET any -> any any (tls.sni; content:"www.example.com"; startswith; nocase; endswith; flow:to_server; msg:"pass rules do not alert/log"; sid:202315873;)
+
+            # Block and log any egress traffic not already allowed above
+            # reject TCP traffic for a more graceful block
+            reject tls $HOME_NET any -> any any (msg:"Default Egress HTTPS Reject"; ssl_state:client_hello; ja4.hash; content:"_"; flowbits:set,blocked; flow:to_server; sid:999991;)
+            alert tls $HOME_NET any -> any any (msg:"X25519Kyber768"; flowbits:isnotset,blocked; flowbits:set,X25519Kyber768; noalert; flow:to_server; sid:999993;)
+            reject http $HOME_NET any -> any any (msg:"Default Egress HTTP Reject"; flowbits:set,blocked; flow:to_server; sid:999992;)
+            reject tcp $HOME_NET any -> any any (msg:"Default Egress TCP Reject"; flowbits:isnotset,blocked; flowbits:isnotset,X25519Kyber768; flow:to_server; sid:999994;)
+            drop udp $HOME_NET any -> any any (msg:"Default Egress UDP Drop"; flow:to_server; sid:999995;)
+            drop icmp $HOME_NET any -> any any (msg:"Default Egress ICMP Drop"; flow:to_server; sid:999996;)
+            drop ip $HOME_NET any -> any any (msg:"Default Egress IP Drop"; ip_proto:!TCP; ip_proto:!UDP; ip_proto:!ICMP; flow:to_server; sid:999997;)
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+      Capacity: 1000
+      Description: Example best practice egress allow list rule group
+
+  LogOnlyRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: basic-log-rules
+      Type: STATEFUL
+      RuleGroup:
+        RulesSource:
+          RulesString: |
+            # Visit https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/ for all the best practices
+
+            # Alert on risky geos
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to RU"; flow:to_server; geoip:dst,RU; metadata:geo RU; sid:100001;)
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to CN"; flow:to_server; geoip:dst,CN; metadata:geo CN; sid:100002;)
+
+            # Alert on high risk TLDs
+            alert tls $HOME_NET any -> any any (tls.sni; content:".ru"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:100003;)
+            alert http $HOME_NET any -> any any (http.host; content:".ru"; msg:"High risk TLD blocked"; flow:to_server; sid:100004;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".xyz"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:100005;)
+            alert http $HOME_NET any -> any any (http.host; content:".xyz"; msg:"High risk TLD blocked"; flow:to_server; sid:100006;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".info"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:100007;)
+            alert http $HOME_NET any -> any any (http.host; content:".info"; msg:"High risk TLD blocked"; flow:to_server; sid:100008;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".onion"; nocase; msg:"High risk TLD blocked"; flow:to_server; sid:100009;)
+            alert http $HOME_NET any -> any any (http.host; content:".onion"; msg:"High risk TLD blocked"; flow:to_server; sid:1000010;)
+
+            # Alert on specific protocols
+            alert icmp any any -> any any (msg:"Alert on ping"; sid:1000011;)
+            alert http any any -> any any (msg:"Alert on http"; sid:1000012;)
+            alert tls any any -> any any (msg:"Alert on tls (https)"; sid:1000013;)
+            alert ssh any any -> any any (msg:"Alert on ssh"; sid:1000014;)
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+      Capacity: 100
+      Description: Simple rule group to log specific protocols, used to showcase default firewall behavior without any drop/pass rules. 
+
+  # Firewall Policies
+  
+  # Ingress Firewall Policy
+  IngressFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: "anfw-2az-ingress-policy"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref LogOnlyRuleGroup
+            Priority: 100
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+          StreamExceptionPolicy: REJECT
+        PolicyVariables:
+          RuleVariables:
+            HOME_NET:
+              Definition:
+                - 10.2.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall-policy"
+        - Key: Type
+          Value: Ingress
+
+  # Egress Firewall Policy
+  EgressFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: "anfw-2az-egress-policy"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref LogOnlyRuleGroup
+            Priority: 100
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+          StreamExceptionPolicy: REJECT
+        PolicyVariables:
+          RuleVariables:
+            HOME_NET:
+              Definition:
+                - 10.2.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall-policy"
+        - Key: Type
+          Value: Egress
+  # Network Firewalls
+  
+  # Ingress Network Firewall
+  IngressNetworkFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: "anfw-2az-ingress-firewall"
+      FirewallPolicyArn: !Ref IngressFirewallPolicy
+      VpcId: !Ref VPC
+      SubnetMappings:
+        - SubnetId: !Ref IngressFirewallSubnetAZ1
+        - SubnetId: !Ref IngressFirewallSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall"
+        - Key: Type
+          Value: Ingress
+
+  # Egress Network Firewall
+  EgressNetworkFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: "anfw-2az-egress-firewall"
+      FirewallPolicyArn: !Ref EgressFirewallPolicy
+      VpcId: !Ref VPC
+      SubnetMappings:
+        - SubnetId: !Ref EgressFirewallSubnetAZ1
+        - SubnetId: !Ref EgressFirewallSubnetAZ2
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall"
+        - Key: Type
+          Value: Egress
+  # Firewall Logging
+  
+  # Ingress Firewall Logs
+  IngressFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      checkov:
+        skip:
+          - id: "CKV_AWS_158"
+            comment: "Ensure that CloudWatch Log Group is encrypted by KMS"
+    Properties:
+      LogGroupName: "/anfw-2az/ingress-firewall/flow"
+      RetentionInDays: 30
+
+  IngressFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      checkov:
+        skip:
+          - id: "CKV_AWS_158"
+            comment: "Ensure that CloudWatch Log Group is encrypted by KMS"
+    Properties:
+      LogGroupName: "/anfw-2az/ingress-firewall/alert"
+      RetentionInDays: 30
+
+  IngressFirewallLogging:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref IngressNetworkFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: "/anfw-2az/ingress-firewall/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: "/anfw-2az/ingress-firewall/alert"
+
+  # Egress Firewall Logs
+  EgressFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      checkov:
+        skip:
+          - id: "CKV_AWS_158"
+            comment: "Ensure that CloudWatch Log Group is encrypted by KMS"
+    Properties:
+      LogGroupName: "/anfw-2az/egress-firewall/flow"
+      RetentionInDays: 30
+
+  EgressFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Metadata:
+      checkov:
+        skip:
+          - id: "CKV_AWS_158"
+            comment: "Ensure that CloudWatch Log Group is encrypted by KMS"
+    Properties:
+      LogGroupName: "/anfw-2az/egress-firewall/alert"
+      RetentionInDays: 30
+
+  EgressFirewallLogging:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref EgressNetworkFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: "/anfw-2az/egress-firewall/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: "/anfw-2az/egress-firewall/alert"
+  # Route Tables for Distributed Ingress/Egress Architecture - 2 AZ Deployment
+  # Based on AWS re:Post article for proper source IP visibility
+  
+  # Private Subnet Route Tables - Egress traffic goes through egress firewall
+  PrivateRouteTableAZ1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-rt-az1"
+
+  PrivateRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableAZ1
+      SubnetId: !Ref PrivateSubnetAZ1
+
+  # Route all egress traffic from private subnet AZ1 through egress firewall AZ1
+  PrivateDefaultRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: EgressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref PrivateRouteTableAZ1
+
+  PrivateRouteTableAZ2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-rt-az2"
+
+  PrivateRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTableAZ2
+      SubnetId: !Ref PrivateSubnetAZ2
+
+  # Route all egress traffic from private subnet AZ2 through egress firewall AZ2
+  PrivateDefaultRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: EgressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref PrivateRouteTableAZ2
+
+  # NLB Subnet Route Tables - Return traffic goes back through ingress firewall
+  NLBRouteTableAZ1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-rt-az1"
+
+  NLBRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NLBRouteTableAZ1
+      SubnetId: !Ref NLBSubnetAZ1
+
+  # NLB AZ1 routes return traffic back through ingress firewall AZ1 to maintain symmetry
+  NLBToIngressFirewallRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref NLBRouteTableAZ1
+
+  NLBRouteTableAZ2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-rt-az2"
+
+  NLBRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NLBRouteTableAZ2
+      SubnetId: !Ref NLBSubnetAZ2
+
+  # NLB AZ2 routes return traffic back through ingress firewall AZ2 to maintain symmetry
+  NLBToIngressFirewallRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref NLBRouteTableAZ2
+
+  # NAT Subnet Route Tables - Direct to IGW for internet, back to firewall for private subnet
+  NATRouteTableAZ1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-rt-az1"
+
+  NATRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NATRouteTableAZ1
+      SubnetId: !Ref NATSubnetAZ1
+
+  # Route to internet via IGW
+  NATDefaultRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref NATRouteTableAZ1
+
+  # Route private subnet AZ1 traffic back through egress firewall AZ1 (critical for return traffic)
+  NATToPrivateSubnetRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: EgressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.1.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref NATRouteTableAZ1
+
+  NATRouteTableAZ2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-rt-az2"
+
+  NATRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NATRouteTableAZ2
+      SubnetId: !Ref NATSubnetAZ2
+
+  # Route to internet via IGW
+  NATDefaultRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref NATRouteTableAZ2
+
+  # Route private subnet AZ2 traffic back through egress firewall AZ2 (critical for return traffic)
+  NATToPrivateSubnetRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: EgressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.4.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref NATRouteTableAZ2
+  # Ingress Firewall Subnet Route Tables
+  IngressFirewallRouteTableAZ1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall-rt-az1"
+
+  IngressFirewallRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressFirewallRouteTableAZ1
+      SubnetId: !Ref IngressFirewallSubnetAZ1
+
+  # Default route for ingress firewall AZ1 to IGW (for return traffic to internet)
+  IngressFirewallDefaultRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref IngressFirewallRouteTableAZ1
+
+  IngressFirewallRouteTableAZ2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-firewall-rt-az2"
+
+  IngressFirewallRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressFirewallRouteTableAZ2
+      SubnetId: !Ref IngressFirewallSubnetAZ2
+
+  # Default route for ingress firewall AZ2 to IGW (for return traffic to internet)
+  IngressFirewallDefaultRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref IngressFirewallRouteTableAZ2
+
+  # Egress Firewall Subnet Route Tables
+  EgressFirewallRouteTableAZ1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall-rt-az1"
+
+  EgressFirewallRouteTableAssociationAZ1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref EgressFirewallRouteTableAZ1
+      SubnetId: !Ref EgressFirewallSubnetAZ1
+
+  # Route traffic from egress firewall AZ1 to NAT Gateway AZ1 for internet access
+  EgressFirewallToNATRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: NATGatewayAZ1
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGatewayAZ1
+      RouteTableId: !Ref EgressFirewallRouteTableAZ1
+
+  EgressFirewallRouteTableAZ2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-egress-firewall-rt-az2"
+
+  EgressFirewallRouteTableAssociationAZ2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref EgressFirewallRouteTableAZ2
+      SubnetId: !Ref EgressFirewallSubnetAZ2
+
+  # Route traffic from egress firewall AZ2 to NAT Gateway AZ2 for internet access
+  EgressFirewallToNATRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: NATGatewayAZ2
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGatewayAZ2
+      RouteTableId: !Ref EgressFirewallRouteTableAZ2
+
+  # Internet Gateway Route Table - Ingress traffic routing
+  IngressRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-rt"
+
+  IngressRouteTableAssociation:
+    Type: AWS::EC2::GatewayRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressRouteTable
+      GatewayId: !Ref InternetGateway
+
+  # Route ingress traffic to NLB subnet AZ1 through ingress firewall AZ1
+  IngressToNLBRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.2.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressRouteTable
+
+  # Route ingress traffic to NLB subnet AZ2 through ingress firewall AZ2
+  IngressToNLBRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.5.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressRouteTable
+
+  # Route ingress traffic to private subnet AZ1 through ingress firewall AZ1 (for direct access)
+  IngressToPrivateRouteAZ1:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.1.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressRouteTable
+
+  # Route ingress traffic to private subnet AZ2 through ingress firewall AZ2 (for direct access)
+  IngressToPrivateRouteAZ2:
+    Type: AWS::EC2::Route
+    DependsOn: IngressNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.4.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressRouteTable
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC"
+
+  PrivateSubnetAZ1Id:
+    Description: Private Subnet AZ1 ID
+    Value: !Ref PrivateSubnetAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetAZ1"
+
+  PrivateSubnetAZ2Id:
+    Description: Private Subnet AZ2 ID
+    Value: !Ref PrivateSubnetAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateSubnetAZ2"
+
+  NLBSubnetAZ1Id:
+    Description: Network Load Balancer Subnet AZ1 ID
+    Value: !Ref NLBSubnetAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-NLBSubnetAZ1"
+
+  NLBSubnetAZ2Id:
+    Description: Network Load Balancer Subnet AZ2 ID
+    Value: !Ref NLBSubnetAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-NLBSubnetAZ2"
+
+  NATSubnetAZ1Id:
+    Description: NAT Gateway Subnet AZ1 ID
+    Value: !Ref NATSubnetAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-NATSubnetAZ1"
+
+  NATSubnetAZ2Id:
+    Description: NAT Gateway Subnet AZ2 ID
+    Value: !Ref NATSubnetAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-NATSubnetAZ2"
+
+  IngressFirewallSubnetAZ1Id:
+    Description: Ingress Firewall Subnet AZ1 ID
+    Value: !Ref IngressFirewallSubnetAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallSubnetAZ1"
+
+  IngressFirewallSubnetAZ2Id:
+    Description: Ingress Firewall Subnet AZ2 ID
+    Value: !Ref IngressFirewallSubnetAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallSubnetAZ2"
+
+  EgressFirewallSubnetAZ1Id:
+    Description: Egress Firewall Subnet AZ1 ID
+    Value: !Ref EgressFirewallSubnetAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFirewallSubnetAZ1"
+
+  EgressFirewallSubnetAZ2Id:
+    Description: Egress Firewall Subnet AZ2 ID
+    Value: !Ref EgressFirewallSubnetAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFirewallSubnetAZ2"
+
+  IngressNetworkFirewallId:
+    Description: Ingress Network Firewall ID
+    Value: !Ref IngressNetworkFirewall
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressNetworkFirewall"
+
+  EgressNetworkFirewallId:
+    Description: Egress Network Firewall ID
+    Value: !Ref EgressNetworkFirewall
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressNetworkFirewall"
+
+  IngressFirewallEndpointAZ1:
+    Description: Ingress Network Firewall Endpoint AZ1 ID
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallEndpointAZ1"
+
+  IngressFirewallEndpointAZ2:
+    Description: Ingress Network Firewall Endpoint AZ2 ID
+    Value: !Select [1, !Split [":", !Select [1, !GetAtt IngressNetworkFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallEndpointAZ2"
+
+  EgressFirewallEndpointAZ1:
+    Description: Egress Network Firewall Endpoint AZ1 ID
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFirewallEndpointAZ1"
+
+  EgressFirewallEndpointAZ2:
+    Description: Egress Network Firewall Endpoint AZ2 ID
+    Value: !Select [1, !Split [":", !Select [1, !GetAtt EgressNetworkFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFirewallEndpointAZ2"
+
+  NetworkLoadBalancerDNS:
+    Description: Network Load Balancer DNS Name
+    Value: !GetAtt NetworkLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-DNS"
+
+  NetworkLoadBalancerArn:
+    Description: Network Load Balancer ARN
+    Value: !Ref NetworkLoadBalancer
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-ARN"
+
+  PrivateInstanceAZ1aId:
+    Description: Private EC2 Instance AZ1-1 ID
+    Value: !Ref PrivateInstanceAZ1a
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateInstanceAZ1-1"
+
+  PrivateInstanceAZ1bId:
+    Description: Private EC2 Instance AZ1-2 ID
+    Value: !Ref PrivateInstanceAZ1b
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateInstanceAZ1-2"
+
+  PrivateInstanceAZ2aId:
+    Description: Private EC2 Instance AZ2-1 ID
+    Value: !Ref PrivateInstanceAZ2a
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateInstanceAZ2-1"
+
+  PrivateInstanceAZ2bId:
+    Description: Private EC2 Instance AZ2-2 ID
+    Value: !Ref PrivateInstanceAZ2b
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateInstanceAZ2-2"
+
+  NATGatewayAZ1Id:
+    Description: NAT Gateway AZ1 ID
+    Value: !Ref NATGatewayAZ1
+    Export:
+      Name: !Sub "${AWS::StackName}-NATGatewayAZ1"
+
+  NATGatewayAZ2Id:
+    Description: NAT Gateway AZ2 ID
+    Value: !Ref NATGatewayAZ2
+    Export:
+      Name: !Sub "${AWS::StackName}-NATGatewayAZ2"
+
+  IngressFirewallFlowLogGroup:
+    Description: Ingress Network Firewall Flow Log Group
+    Value: !Ref IngressFirewallLogFlowGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFlowLogGroup"
+
+  IngressFirewallAlertLogGroup:
+    Description: Ingress Network Firewall Alert Log Group
+    Value: !Ref IngressFirewallLogAlertGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressAlertLogGroup"
+
+  EgressFirewallFlowLogGroup:
+    Description: Egress Network Firewall Flow Log Group
+    Value: !Ref EgressFirewallLogFlowGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFlowLogGroup"
+
+  EgressFirewallAlertLogGroup:
+    Description: Egress Network Firewall Alert Log Group
+    Value: !Ref EgressFirewallLogAlertGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressAlertLogGroup"
+
+  TrafficFlowSummary:
+    Description: Summary of traffic flows in this 2-AZ architecture
+    Value: |
+      INGRESS: Internet -> IGW -> Ingress Firewall (AZ1/AZ2) -> NLB (public subnets AZ1/AZ2) -> Private EC2 instances (AZ1/AZ2)
+      EGRESS: Private EC2 instances (AZ1/AZ2) -> Egress Firewall (AZ1/AZ2) -> NAT Gateway (separate public subnets AZ1/AZ2) -> IGW -> Internet
+      
+      High Availability: Resources are distributed across two Availability Zones for redundancy and fault tolerance.

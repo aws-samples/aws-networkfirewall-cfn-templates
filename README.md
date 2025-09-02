@@ -7,6 +7,8 @@
 |Shakeel Ahmad, Sr. Solutions Architect | shkahma@amazon.com|
 |Pratik R. Mankad, Sr. Solutions Architect | pmankad@amazon.com|
 |Daniel Yu, Sr. Technical Account Manager | dyuamzn@amazon.com|
+|Lawton Pittenger, Security Specialist Solutions Architect | lawtontp@amazon.com|
+|Anvesh Koganti, Networking Specialist Solutions Architect | anvkog@amazon.com|
 
 
 ## License:
@@ -24,6 +26,8 @@ This repository contains sample [AWS CloudFormation](https://aws.amazon.com/clou
 For more samples, refer to [AWS CloudFormation Templates](https://aws.amazon.com/cloudformation/resources/templates/) in the [AWS CloudFormation User Guide](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/cfn-sample-templates.html)
 
 For more information about developing application using AWS CloudFormation, see the [AWS CloudFormation User Guide](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html)
+
+For best practices on using AWS Network Firewall, see the [AWS Network Firewall Best Practices Guide](https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/)
 
 ----
 

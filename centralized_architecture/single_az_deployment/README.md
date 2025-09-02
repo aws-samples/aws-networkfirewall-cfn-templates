@@ -1,27 +1,68 @@
-# Centralized Architecture - Single AZ Deployment:
+# Centralized Architecture - Single AZ Deployment
 
-**Template File:** [anfw-centralized-single-1az-template.yaml](anfw-centralized-1az-template.yaml)
+**Template File:** [anfw-centralized-1az-template.yaml](anfw-centralized-1az-template.yaml)
 
-For centralized deployment model, [AWS Transit Gateway](https://aws.amazon.com/transit-gateway/) is a prerequisite. AWS Transit Gateway acts as a network hub and simplifies the connectivity between VPCs as well as on-premises networks. AWS Transit Gateway also provides inter-region peering capabilities to other Transit Gateways to establish a global network using AWS backbone.
+This template deploys AWS Network Firewall in a centralized architecture pattern within a single Availability Zone. This configuration is designed for testing, development, and proof-of-concept environments.
 
-![anfw-centralized-model-1az](../../images/anfw-centralized-model-1az.jpg)
-*Figure 1: Single AZ Centralized Architecture*
+![Base Architecture](../../images/anfw-centralized-model-1az.png)
 
-[Centralized single AZ deployment template](anfw-centralized-1az-template.yaml) template, as described in Figure 1, creates dedicated
+## Architecture Overview
 
-* Inspection VPC for East-West (inter-vpc) traffic inspection. Inspection VPC consists of two subnets in single AZ:
-  * Transit Gateway subnet for Transit Gateway attchment.
-  * Firewall subnet for firewall endpoint.
+This single AZ deployment creates a centralized inspection model using AWS Transit Gateway as the network hub. All traffic between spoke VPCs and to the Internet is routed through dedicated inspection points.
 
-* Central Egress VPC for North-South (spoke VPCs to Internet) traffic inspection. Central Egress VPC consists of 3 subnets in single AZ: 
-  * Transit Gateway subnet for Transit Gateway attchment.
-  * Firewall subnet for firewall endpoint.
-  * Public subnet for NAT Gateway.
+## Resources Created
 
-* Two Spoke VPCs.
+### Inspection VPC
+Centralized VPC for both East-West (VPC to VPC) and North-South (Internet-bound) traffic inspection:
+- **Transit Gateway Subnet** - Attachment point for Transit Gateway
+- **Firewall Subnet** - Contains AWS Network Firewall endpoint
+- **Public Subnet** - Contains NAT Gateway for Internet access
 
-Each Transit Gateway subnet in each dedicated VPC requires a dedicated VPC route table to ensure the traffic is forwarded to firewall endpoint within the same AZ. These route tables have a default route (0.0.0.0/0) pointing towards firewall endpoint in the same AZ.
+### Spoke VPCs
+Two example workload VPCs that demonstrate traffic routing through the inspection points:
+- Private subnets for workload resources
+- Route tables configured to send traffic through Transit Gateway
 
-This is a single AZ configuration. Use it for testing/POC. It is recommended to deploy resources in atleast 2 AZs. For multi AZ deployment refer to [Multi AZ Deployment](../README.md).
+### AWS Network Firewall
+- Firewall policy with example rules
+- Firewall endpoint in the Inspection VPC
+- Logging configuration for traffic analysis
 
-For more details, refer to [Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).
+### Transit Gateway
+- Central routing hub connecting all VPCs
+- Route tables configured to direct traffic through inspection VPC
+- Appliance Mode enabled for the inspection VPC attachment to ensure flow symmetry
+
+## Traffic Flow
+
+1. **East-West Traffic** - VPC to VPC communication routes through the Inspection VPC firewall endpoint
+2. **Egress Traffic** - Internet-bound traffic routes through the Inspection VPC firewall endpoint and NAT Gateway
+
+## Deployment Instructions
+
+1. Ensure you have appropriate AWS permissions
+2. Deploy the CloudFormation template:
+   ```bash
+   aws cloudformation create-stack \
+     --stack-name anfw-centralized-1az \
+     --template-body file://anfw-centralized-1az-template.yaml \
+     --capabilities CAPABILITY_IAM
+   ```
+
+## Important Notes
+
+- **Cost Optimization** - Single VPC design eliminates multiple Transit Gateway traversals - for egress traffic to the internet
+- **Single AZ Limitation** - This deployment lacks high availability and should not be used in production. Designed for development, testing, and learning environments
+
+## Production Considerations
+
+For environments requiring high availability, consider the [Two AZ Deployment](../two_az_deployment/) which provides:
+- High availability across multiple Availability Zones
+- Better fault tolerance
+- Resilient architecture
+
+## Additional Resources
+
+- [AWS Network Firewall Documentation](https://docs.aws.amazon.com/network-firewall/)
+- [AWS Transit Gateway Documentation](https://docs.aws.amazon.com/transit-gateway/)
+- [Deployment models for AWS Network Firewall Blog](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)

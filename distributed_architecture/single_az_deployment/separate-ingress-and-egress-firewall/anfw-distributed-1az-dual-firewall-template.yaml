@@ -8,7 +8,7 @@
 #CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "AWS Network Firewall Demo - Dual Firewall Architecture with Separate Ingress/Egress Firewalls"
+Description: "AWS Network Firewall Demo - Dual Firewall Architecture with Separate Ingress/Egress Firewalls (uksb-u3kfd0gl61)(tag: distributed-dual-firewall-single-az)"
 
 Metadata:
   "AWS::CloudFormation::Interface":

@@ -8,7 +8,7 @@
 #CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "AWS Network Security Workshop with spoke VPCs and centralized egress VPC"
+Description: "AWS Network Security Workshop with spoke VPCs and centralized egress VPC (uksb-u3kfd0gl61)(tag: tgw-native-attach-centralized-firewall)"
 
 Metadata:
   "AWS::CloudFormation::Interface":

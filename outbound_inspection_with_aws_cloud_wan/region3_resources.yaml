@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
-  AWS Cloud WAN Egress Inspection Architecture - Region 1 resources
+  AWS Cloud WAN Egress Inspection Architecture - Region 1 resources (uksb-u3kfd0gl61)(tag: cloudwan-stack-5)
 Transform: 'AWS::LanguageExtensions'
 
 Metadata:

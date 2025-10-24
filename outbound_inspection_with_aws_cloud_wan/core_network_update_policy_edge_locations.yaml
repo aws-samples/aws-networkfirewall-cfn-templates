@@ -1,7 +1,7 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: >-
-  Egress Inspection using AWS Cloud WAN and AWS Network Firewall. Templates creates 
-  AWS Cloud WAN global and core Network with core network base policy.
+  "Egress Inspection using AWS Cloud WAN and AWS Network Firewall. Templates creates 
+  AWS Cloud WAN global and core Network with core network base policy.(uksb-u3kfd0gl61)(tag: cloudwan-stack-2)"
 
 Resources:
   GlobalNetwork:

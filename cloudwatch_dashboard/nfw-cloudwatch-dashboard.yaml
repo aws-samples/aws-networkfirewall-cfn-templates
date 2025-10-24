@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS Network Firewall CloudWatch Dashboard
+Description: "AWS Network Firewall CloudWatch Dashboard (uksb-u3kfd0gl61)(tag: open-source-cloudwatch-dashboard)"
 Parameters:
     FirewallName:
         Description: Enter the firewall name as seen in the firewall console

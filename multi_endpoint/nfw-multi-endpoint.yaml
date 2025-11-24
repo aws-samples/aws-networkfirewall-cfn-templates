@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "AWS Network Firewall - Single AZ Multi-Endpoint Architecture"
+Description: "AWS Network Firewall - Single AZ Multi-Endpoint Architecture (uksb-u3kfd0gl61)(tag: multi-endpoint-sample)"
 
 Parameters:
   AvailabilityZoneSelection:

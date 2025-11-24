@@ -1,0 +1,584 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS Network Firewall - Single AZ Multi-Endpoint Architecture"
+
+Parameters:
+  AvailabilityZoneSelection:
+    Description: Availability Zone
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  LatestAmiId:
+    Description: Latest EC2 AMI from Systems Manager Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.2.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-vpc"
+
+  # Private Subnet - EC2 instances
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-subnet"
+
+  # NLB Subnet - Network Load Balancer
+  NLBSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.2.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-subnet"
+
+  # NAT Subnet - NAT Gateway
+  NATSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.16.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-subnet"
+
+  # Multiple Firewall Subnets for Multi-Endpoint
+  PrimaryFirewallSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.15.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-primary-firewall-subnet"
+
+  SecondaryFirewallSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: "10.2.17.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-secondary-firewall-subnet"
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igw"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # NAT Gateway
+  NATGatewayEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw-eip"
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATGatewayEIP.AllocationId
+      SubnetId: !Ref NATSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-natgw"
+
+  # IAM Role for EC2 to use SSM
+  EC2SSMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-ec2-ssm-role"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ec2-ssm-role"
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${AWS::StackName}-ec2-instance-profile"
+      Roles:
+        - !Ref EC2SSMRole
+
+  # Security Groups
+  PrivateInstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for private EC2 instances"
+      GroupName: "multi-endpoint-private-instance-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref NLBSecurityGroup
+          Description: "HTTP from NLB"
+        - IpProtocol: icmp
+          CidrIp: 10.2.0.0/16
+          Description: "ICMP from VPC"
+          FromPort: "-1"
+          ToPort: "-1"
+
+  NLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for Network Load Balancer"
+      GroupName: "multi-endpoint-nlb-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: "HTTP from internet"
+
+  SSMEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group for SSM VPC Endpoint"
+      GroupName: "multi-endpoint-ssm-endpoint-sg"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.2.0.0/16
+          Description: "HTTPS from VPC"
+
+  # Network Load Balancer
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: "multi-endpoint-nlb"
+      Type: network
+      Scheme: internet-facing
+      Subnets:
+        - !Ref NLBSubnet
+      SecurityGroups:
+        - !Ref NLBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb"
+
+  # SSM VPC Endpoints
+  SSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref SSMEndpointSecurityGroup
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - ssm:*
+            Resource: '*'
+
+  SSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref SSMEndpointSecurityGroup
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - ssmmessages:*
+            Resource: '*'
+
+  EC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      VpcId: !Ref VPC
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      VpcEndpointType: Interface
+      SubnetIds:
+        - !Ref PrivateSubnet
+      SecurityGroupIds:
+        - !Ref SSMEndpointSecurityGroup
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - ec2messages:*
+            Resource: '*'
+
+  # Private EC2 Instances
+  PrivateInstance1:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - PrivateDefaultRoute
+      - PrimaryFirewallToNATRoute
+      - NATDefaultRoute
+      - MultiEndpointNetworkFirewall
+      - NATGateway
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref PrivateSubnet
+      InstanceType: t2.micro
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      SecurityGroupIds:
+        - !Ref PrivateInstanceSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd amazon-ssm-agent
+          systemctl start httpd
+          systemctl enable httpd
+          systemctl start amazon-ssm-agent
+          systemctl enable amazon-ssm-agent
+          echo "<h1>Multi-Endpoint NFW Demo - Instance 1</h1>" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-instance-1"
+
+  BasicRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: basic-allow-rules
+      Type: STATEFUL
+      RuleGroup:
+        RulesSource:
+          RulesString: |
+            # Empty rule group
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+      Capacity: 100
+      Description: Basic rules for multi-endpoint firewall
+
+  # Firewall Policy
+  MultiEndpointFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: "multi-endpoint-policy"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulDefaultActions:
+          - 'aws:alert_established'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref BasicRuleGroup
+            Priority: 100
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+        PolicyVariables:
+          RuleVariables:
+            HOME_NET:
+              Definition:
+                - 10.2.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-firewall-policy"
+
+  # Single Network Firewall with Multiple Endpoints
+  MultiEndpointNetworkFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: "multi-endpoint-firewall"
+      FirewallPolicyArn: !Ref MultiEndpointFirewallPolicy
+      VpcId: !Ref VPC
+      SubnetMappings:
+        - SubnetId: !Ref PrimaryFirewallSubnet    # Primary endpoint
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-multi-endpoint-firewall"
+
+  # Secondary endpoint
+  SecondaryEndpoint:
+    Type: AWS::NetworkFirewall::VpcEndpointAssociation
+    Properties:
+      Description: Secondary Network Firewall Endpoint
+      FirewallArn: !Ref MultiEndpointNetworkFirewall
+      SubnetMapping:
+        SubnetId: !Ref SecondaryFirewallSubnet
+      VpcId: !Ref VPC
+
+
+  # NLB Target Group
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: "multi-endpoint-nlb-tg"
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VPC
+      TargetType: instance
+      Targets:
+        - Id: !Ref PrivateInstance1
+          Port: 80
+      HealthCheckProtocol: TCP
+      HealthCheckPort: 80
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-tg"
+
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: 80
+      Protocol: TCP
+
+  # Route Tables - routing for multi-endpoint
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-private-rt"
+
+  PrivateRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnet
+
+  # Route egress traffic through primary firewall endpoint
+  PrivateDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MultiEndpointNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt MultiEndpointNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref PrivateRouteTable
+
+  # NLB Route Table
+  NLBRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nlb-rt"
+
+  NLBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NLBRouteTable
+      SubnetId: !Ref NLBSubnet
+
+  # NLB routes return traffic through secondary firewall endpoint (for ingress inspection)
+  NLBToFirewallRoute:
+    Type: AWS::EC2::Route
+    DependsOn: SecondaryEndpoint
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !GetAtt SecondaryEndpoint.EndpointId
+      RouteTableId: !Ref NLBRouteTable
+
+  # Firewall Subnet Route Tables
+  PrimaryFirewallRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-primary-firewall-rt"
+
+  PrimaryFirewallRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrimaryFirewallRouteTable
+      SubnetId: !Ref PrimaryFirewallSubnet
+
+  SecondaryFirewallRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-secondary-firewall-rt"
+
+  SecondaryFirewallRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SecondaryFirewallRouteTable
+      SubnetId: !Ref SecondaryFirewallSubnet
+
+  # Firewall routes to NAT Gateway
+  PrimaryFirewallToNATRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NATGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGateway
+      RouteTableId: !Ref PrimaryFirewallRouteTable
+
+  # Secondary firewall routes back to IGW for ingress return traffic
+  SecondaryFirewallToIGWRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref SecondaryFirewallRouteTable
+
+  # NAT Subnet Route Table
+  NATRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-nat-rt"
+
+  NATRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref NATRouteTable
+      SubnetId: !Ref NATSubnet
+
+  NATDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref NATRouteTable
+
+  # NAT Gateway return route to private subnet through primary firewall endpoint
+  NATToPrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: MultiEndpointNetworkFirewall
+    Properties:
+      DestinationCidrBlock: "10.2.1.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt MultiEndpointNetworkFirewall.EndpointIds]]]
+      RouteTableId: !Ref NATRouteTable
+
+  # IGW Route Table for ingress
+  IngressRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ingress-rt"
+
+  IngressRouteTableAssociation:
+    Type: AWS::EC2::GatewayRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressRouteTable
+      GatewayId: !Ref InternetGateway
+
+  # Route ingress traffic to NLB through secondary firewall endpoint
+  IngressToNLBRoute:
+    Type: AWS::EC2::Route
+    DependsOn: SecondaryEndpoint
+    Properties:
+      DestinationCidrBlock: "10.2.2.0/24"
+      VpcEndpointId: !GetAtt SecondaryEndpoint.EndpointId
+      RouteTableId: !Ref IngressRouteTable
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPC"
+
+  MultiEndpointNetworkFirewallId:
+    Description: Multi-Endpoint Network Firewall ID
+    Value: !Ref MultiEndpointNetworkFirewall
+    Export:
+      Name: !Sub "${AWS::StackName}-MultiEndpointFirewall"
+
+  PrimaryFirewallEndpoint:
+    Description: Primary Network Firewall Endpoint ID
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt MultiEndpointNetworkFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-PrimaryEndpoint"
+
+  SecondaryFirewallEndpoint:
+    Description: Secondary Network Firewall Endpoint ID
+    Value: !GetAtt SecondaryEndpoint.EndpointId
+    Export:
+      Name: !Sub "${AWS::StackName}-SecondaryEndpoint"
+
+  NetworkLoadBalancerDNS:
+    Description: Network Load Balancer DNS Name
+    Value: !GetAtt NetworkLoadBalancer.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-NLB-DNS"
+
+  PrivateInstance1Id:
+    Description: Private EC2 Instance ID
+    Value: !Ref PrivateInstance1
+    Export:
+      Name: !Sub "${AWS::StackName}-PrivateInstance1"
+
+  SSMEndpointId:
+    Description: SSM VPC Endpoint ID
+    Value: !Ref SSMEndpoint
+    Export:
+      Name: !Sub "${AWS::StackName}-SSMEndpoint"
+
+  TrafficFlowSummary:
+    Description: Summary of traffic flows in multi-endpoint architecture
+    Value: |
+      INGRESS: Internet -> IGW -> SecondaryEndpoint -> NLB -> Private EC2
+      EGRESS: Private EC2 -> MultiEndpointNetworkFirewall (Primary) -> NAT Gateway -> IGW -> Internet
+      ENDPOINTS: Primary endpoint for egress filtering, Secondary endpoint for ingress filtering
+      SSM: Private EC2 -> SSM VPC Endpoints (ssm, ssmmessages, ec2messages)

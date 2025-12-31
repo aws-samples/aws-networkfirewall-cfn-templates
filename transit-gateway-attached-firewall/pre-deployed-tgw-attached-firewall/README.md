@@ -77,11 +77,11 @@ After deployment completes:
 ## Important Notes
 
 - **Single AZ Deployment** - This template deploys resources in a single Availability Zone for simplicity and cost optimization
-- **Custom Resource** - Uses Lambda-backed custom resource to manage firewall attachment to Transit Gateway
 - **Appliance Mode** - Automatically enabled for transit gateway-attached firewalls to ensure flow symmetry
 
 ## Additional Resources
 
 - [AWS Network Firewall Documentation](https://docs.aws.amazon.com/network-firewall/)
+- [AWS Network Firewall Best Practices Guide](https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/)
 - [Transit Gateway-Attached Firewalls](https://docs.aws.amazon.com/network-firewall/latest/developerguide/tgw-firewall.html)
 - [Deployment models for AWS Network Firewall Blog](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)

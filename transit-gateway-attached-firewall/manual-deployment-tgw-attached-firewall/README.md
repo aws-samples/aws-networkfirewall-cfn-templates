@@ -263,5 +263,6 @@ After completing all steps, verify the configuration:
 ## Additional Resources
 
 - [AWS Network Firewall Documentation](https://docs.aws.amazon.com/network-firewall/)
+- [AWS Network Firewall Best Practices Guide](https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/)
 - [Transit Gateway-Attached Firewalls](https://docs.aws.amazon.com/network-firewall/latest/developerguide/tgw-firewall.html)
 - [Pre-Deployed Architecture](../pre-deployed-tgw-attached-firewall/) - Fully automated deployment option

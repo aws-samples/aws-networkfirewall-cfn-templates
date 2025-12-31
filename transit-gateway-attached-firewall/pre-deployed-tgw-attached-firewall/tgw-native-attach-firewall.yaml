@@ -614,11 +614,12 @@ Resources:
       TransitGatewayAttachmentId: !Ref AttachEgressVPC
       TransitGatewayRouteTableId: !Ref EgressRouteTable
 
+  # Transit Gateway Route Table Association for Inspection VPC
   AssociateInspectionVPCRouteTable:
     Type: AWS::EC2::TransitGatewayRouteTableAssociation
-    DependsOn: FirewallAttachmentCustomResource
+    DependsOn: Firewall
     Properties:
-      TransitGatewayAttachmentId: !GetAtt FirewallAttachmentCustomResource.AttachmentId
+      TransitGatewayAttachmentId: !GetAtt Firewall.TransitGatewayAttachmentId
       TransitGatewayRouteTableId: !Ref InspectionRouteTable
 
   # Propagate spoke routes to egress route table for return traffic
@@ -637,10 +638,10 @@ Resources:
   # Route all spoke traffic to inspection VPC
   SpokeInspectionRoute:
     Type: AWS::EC2::TransitGatewayRoute
-    DependsOn: FirewallAttachmentCustomResource
+    DependsOn: Firewall
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
-      TransitGatewayAttachmentId: !GetAtt FirewallAttachmentCustomResource.AttachmentId
+      TransitGatewayAttachmentId: !GetAtt Firewall.TransitGatewayAttachmentId
       TransitGatewayRouteTableId: !Ref SpokeRouteTable
 
   # Route all inspection VPC traffic to egress VPC
@@ -654,10 +655,10 @@ Resources:
   # Route all spoke traffic to egress VPC
   EgressVPCtoInspectionVPCRoute:
     Type: AWS::EC2::TransitGatewayRoute
-    DependsOn: FirewallAttachmentCustomResource
+    DependsOn: Firewall
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
-      TransitGatewayAttachmentId: !GetAtt FirewallAttachmentCustomResource.AttachmentId
+      TransitGatewayAttachmentId: !GetAtt Firewall.TransitGatewayAttachmentId
       TransitGatewayRouteTableId: !Ref EgressRouteTable
 
 
@@ -786,79 +787,6 @@ Resources:
         - Key: Name
           Value: !Sub "inspection-firewall-policy-${AWS::StackName}"
 
-  FirewallAttachmentLambdaRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-      Policies:
-        - PolicyName: NetworkFirewallDescribe
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - network-firewall:DescribeFirewall
-                Resource: '*'
-
-  FirewallAttachmentLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Runtime: python3.12
-      Handler: index.lambda_handler
-      Role: !GetAtt FirewallAttachmentLambdaRole.Arn
-      Code:
-        ZipFile: |
-          import boto3
-          import json
-          import urllib3
-
-          def lambda_handler(event, context):
-              try:
-                  firewall_arn = event['ResourceProperties']['FirewallArn']
-                  
-                  if event['RequestType'] == 'Delete':
-                      send_response(event, context, 'SUCCESS', {})
-                      return
-                  
-                  nfw = boto3.client('network-firewall')
-                  response = nfw.describe_firewall(FirewallArn=firewall_arn)
-                  
-                  attachment_id = response['FirewallStatus']['TransitGatewayAttachmentSyncState']['AttachmentId']
-                  
-                  send_response(event, context, 'SUCCESS', {'AttachmentId': attachment_id})
-                  
-              except Exception as e:
-                  print(f"Error: {str(e)}")
-                  send_response(event, context, 'FAILED', {})
-
-          def send_response(event, context, status, data):
-              response_body = {
-                  'Status': status,
-                  'Reason': f'See CloudWatch Log Stream: {context.log_stream_name}',
-                  'PhysicalResourceId': context.log_stream_name,
-                  'StackId': event['StackId'],
-                  'RequestId': event['RequestId'],
-                  'LogicalResourceId': event['LogicalResourceId'],
-                  'Data': data
-              }
-              
-              http = urllib3.PoolManager()
-              http.request('PUT', event['ResponseURL'], body=json.dumps(response_body))
-
-  FirewallAttachmentCustomResource:
-    Type: AWS::CloudFormation::CustomResource
-    DependsOn: Firewall
-    Properties:
-      ServiceToken: !GetAtt FirewallAttachmentLambda.Arn
-      FirewallArn: !Ref Firewall
 
   Firewall:
     Type: AWS::NetworkFirewall::Firewall

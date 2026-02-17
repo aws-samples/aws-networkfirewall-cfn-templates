@@ -4,6 +4,8 @@
 
 This guide walks you through deploying AWS Network Firewall with Transit Gateway native attachment using a hands-on approach. You'll first deploy the base infrastructure, then manually configure the firewall attachment and routing to enable traffic inspection.
 
+**Note:** Transit Gateway-Attached Firewall is required to use [Transit Gateway Flexible Cost Allocation](https://docs.aws.amazon.com/vpc/latest/tgw/metering-policy.html) for chargebacks. Other centralized deployment models do not support this feature.
+
 ![Base Infrastructure](../../images/tgw-native-attach-base.png)
 
 ## Architecture Overview
@@ -250,15 +252,9 @@ After completing all steps, verify the configuration:
    - Navigate to **CloudWatch Logs**
    - Check the flow and alert log groups for traffic inspection events
 
-## Traffic Flow Summary
+## Important Notes
 
-**Before Configuration:**
-- East-West: Spoke → TGW → Spoke (no inspection)
-- Egress: Spoke → TGW → Egress VPC → Internet (no inspection)
-
-**After Configuration:**
-- East-West: Spoke → TGW → Firewall → TGW → Spoke (inspected)
-- Egress: Spoke → TGW → Firewall → TGW → Egress VPC → Internet (inspected)
+- **Flexible Cost Allocation** - Transit Gateway-Attached Firewall is required to use [Transit Gateway Flexible Cost Allocation](https://docs.aws.amazon.com/vpc/latest/tgw/metering-policy.html) for chargebacks (not available with other centralized deployment models)
 
 ## Additional Resources
 

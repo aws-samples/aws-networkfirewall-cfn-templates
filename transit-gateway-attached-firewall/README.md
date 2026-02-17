@@ -8,6 +8,7 @@ The AWS Network Firewall integration with AWS Transit Gateway enables you to cre
 - **Centralized Management** - Single firewall attachment provides inspection for East-West and egress traffic
 - **Automatic Appliance Mode** - Always enabled for transit gateway-attached firewalls
 - **Cost Optimization** - Centralized design reduces infrastructure overhead by eliminating firewall endpoint sprawl
+- **Flexible Cost Allocation** - Required for [Transit Gateway Flexible Cost Allocation](https://docs.aws.amazon.com/vpc/latest/tgw/metering-policy.html) chargebacks (not available with other centralized deployment models)
 
 ## Available Deployment Options
 

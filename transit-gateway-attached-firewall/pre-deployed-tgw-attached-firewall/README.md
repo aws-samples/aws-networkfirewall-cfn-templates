@@ -4,6 +4,8 @@
 
 This template provides a fully automated deployment of AWS Network Firewall with native Transit Gateway attachment. The complete infrastructure is deployed with firewall attachment and routing pre-configured for immediate use.
 
+**Note:** Transit Gateway-Attached Firewall is required to use [Transit Gateway Flexible Cost Allocation](https://docs.aws.amazon.com/vpc/latest/tgw/metering-policy.html) for chargebacks. Other centralized deployment models do not support this feature.
+
 ![Full Deployment Architecture](../../images/tgw-native-attach-full.png)
 
 ## Architecture Overview

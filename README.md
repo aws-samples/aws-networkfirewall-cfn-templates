@@ -41,6 +41,7 @@ Routes inbound internet traffic through a dedicated Edge VPC containing Network 
 | [Single AZ Ingress](centralized_architecture/centralized_ingress_single_az/) | Single availability zone (NLB with TLS termination) |
 | [Two AZ Ingress](centralized_architecture/centralized_ingress_two_az/) | High availability across two AZs (ALB with HTTPS termination) |
 
+<!-- TODO: Add architecture diagram for centralized ingress inspection (current image shows egress/east-west only) -->
 ![Centralized Architecture](images/anfw-centralized-model-1az.png)
 
 ### Distributed Architecture

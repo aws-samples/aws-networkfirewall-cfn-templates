@@ -32,6 +32,15 @@ Routes traffic through a dedicated inspection VPC containing the firewall endpoi
 | [Single AZ](centralized_architecture/single_az_deployment/) | Single availability zone |
 | [Two AZ](centralized_architecture/two_az_deployment/) | High availability across two AZs |
 
+#### [Centralized Ingress Inspection](centralized_architecture/)
+
+Routes inbound internet traffic through a dedicated Edge VPC containing Network Firewall endpoints for inspection before forwarding to spoke VPCs via Transit Gateway. TLS is terminated at the Edge load balancer.
+
+| Template | Use Case |
+|----------|----------|
+| [Single AZ Ingress](centralized_architecture/centralized_ingress_single_az/) | Single availability zone (NLB with TLS termination) |
+| [Two AZ Ingress](centralized_architecture/centralized_ingress_two_az/) | High availability across two AZs (ALB with HTTPS termination) |
+
 ![Centralized Architecture](images/anfw-centralized-model-1az.png)
 
 ### Distributed Architecture

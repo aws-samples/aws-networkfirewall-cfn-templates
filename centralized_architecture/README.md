@@ -27,6 +27,20 @@ Both templates create:
 
 **Spoke VPCs** - Example workload VPCs that route traffic through the inspection VPC
 
+### Centralized Ingress Inspection
+
+Templates that add ingress traffic inspection to the centralized model. All inbound internet traffic is routed through AWS Network Firewall in an Edge VPC before reaching spoke VPC workloads via Transit Gateway. TLS is terminated at the Edge load balancer; downstream traffic to spoke NLBs and EC2 instances uses plaintext HTTP.
+
+#### [Single AZ Ingress Deployment](centralized_ingress_single_az/)
+- **Template:** `anfw-centralized-ingress-1az-template.yaml`
+- **Use Case:** Testing and proof-of-concept environments
+- **Edge LB:** Internet-facing NLB with TLS termination (ALBs require 2 AZs)
+
+#### [Two AZ Ingress Deployment](centralized_ingress_two_az/)
+- **Template:** `anfw-centralized-ingress-2az-template.yaml`
+- **Use Case:** Production environments requiring high availability
+- **Edge LB:** Internet-facing ALB with HTTPS termination across two AZs
+
 
 ## Additional Resources
 

@@ -17,6 +17,7 @@ Metadata:
           default: "VPC Parameters"
         Parameters:
           - AvailabilityZoneSelection
+          - NLBCertificateArn
       - Label:
           default: "EC2 Parameters"
         Parameters:
@@ -27,10 +28,18 @@ Parameters:
     Type: AWS::EC2::AvailabilityZone::Name
     Default: us-east-1a
 
+  NLBCertificateArn:
+    Description: ACM Certificate ARN for the Edge NLB TLS listener (leave empty to skip TLS listener)
+    Type: String
+    Default: ""
+
   LatestAmiId:
     Description: Latest EC2 AMI from Systems Manager Parameter Store
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+Conditions:
+  HasNLBCertificate: !Not [!Equals [!Ref NLBCertificateArn, ""]]
 
 Resources:
 # Spoke VPC A
@@ -145,7 +154,7 @@ Resources:
   SubnetASecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP/HTTPS from inspection VPC and spoke VPC"
+      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
       GroupName: !Sub "spoke-a-sec-group-${AWS::StackName}"
       VpcId: !Ref SpokeVPCA
       SecurityGroupIngress:
@@ -165,20 +174,10 @@ Resources:
           FromPort: 80
           ToPort: 80
         - IpProtocol: tcp
-          CidrIp: 100.64.0.0/16
-          Description: "Allow HTTPS from Edge VPC (NLB traffic)"
-          FromPort: 443
-          ToPort: 443
-        - IpProtocol: tcp
           CidrIp: 10.1.0.0/16
           Description: "Allow HTTP from Spoke A VPC (NLB health checks)"
           FromPort: 80
           ToPort: 80
-        - IpProtocol: tcp
-          CidrIp: 10.1.0.0/16
-          Description: "Allow HTTPS from Spoke A VPC (NLB health checks)"
-          FromPort: 443
-          ToPort: 443
 
   EC2SubnetA:
     Type: 'AWS::EC2::Instance'
@@ -198,13 +197,7 @@ Resources:
           #!/bin/bash
           # Wait for internet connectivity (egress path via NAT GW may take time to converge)
           for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
-          yum install -y httpd mod_ssl
-          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout /etc/pki/tls/private/localhost.key \
-            -out /etc/pki/tls/certs/localhost.crt \
-            -subj "/CN=localhost"
-          # Harden TLS: disable weak protocols and ciphers
-          printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
+          yum install -y httpd
           systemctl start httpd
           systemctl enable httpd
           echo "<html><body><h1>Spoke A - ${AvailabilityZoneSelection}</h1></body></html>" > /var/www/html/index.html
@@ -324,7 +317,7 @@ Resources:
   SubnetBSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP/HTTPS from inspection VPC and spoke VPC"
+      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
       GroupName: !Sub "spoke-b-sec-group-${AWS::StackName}"
       VpcId: !Ref SpokeVPCB
       SecurityGroupIngress:
@@ -344,20 +337,10 @@ Resources:
           FromPort: 80
           ToPort: 80
         - IpProtocol: tcp
-          CidrIp: 100.64.0.0/16
-          Description: "Allow HTTPS from Edge VPC (NLB traffic)"
-          FromPort: 443
-          ToPort: 443
-        - IpProtocol: tcp
           CidrIp: 10.2.0.0/16
           Description: "Allow HTTP from Spoke B VPC (NLB health checks)"
           FromPort: 80
           ToPort: 80
-        - IpProtocol: tcp
-          CidrIp: 10.2.0.0/16
-          Description: "Allow HTTPS from Spoke B VPC (NLB health checks)"
-          FromPort: 443
-          ToPort: 443
 
   EC2SubnetB:
     Type: 'AWS::EC2::Instance'
@@ -376,12 +359,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
-          yum install -y httpd mod_ssl
-          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-            -keyout /etc/pki/tls/private/localhost.key \
-            -out /etc/pki/tls/certs/localhost.crt \
-            -subj "/CN=localhost"
-          printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
+          yum install -y httpd
           systemctl start httpd
           systemctl enable httpd
           echo "<html><body><h1>Spoke B - ${AvailabilityZoneSelection}</h1></body></html>" > /var/www/html/index.html
@@ -428,30 +406,6 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref SpokeANLBTargetGroupHTTP
 
-  SpokeANLBTargetGroupHTTPS:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: !Sub "sa-htps-${AWS::StackName}"
-      Port: 443
-      Protocol: TCP
-      TargetType: instance
-      VpcId: !Ref SpokeVPCA
-      Targets:
-        - Id: !Ref EC2SubnetA
-      Tags:
-        - Key: Name
-          Value: !Sub "spoke-a-nlb-tg-https-${AWS::StackName}"
-
-  SpokeANLBListenerHTTPS:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref SpokeANLB
-      Port: 443
-      Protocol: TCP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref SpokeANLBTargetGroupHTTPS
-
   SpokeBNLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -488,30 +442,6 @@ Resources:
       DefaultActions:
         - Type: forward
           TargetGroupArn: !Ref SpokeBNLBTargetGroupHTTP
-
-  SpokeBNLBTargetGroupHTTPS:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: !Sub "sb-htps-${AWS::StackName}"
-      Port: 443
-      Protocol: TCP
-      TargetType: instance
-      VpcId: !Ref SpokeVPCB
-      Targets:
-        - Id: !Ref EC2SubnetB
-      Tags:
-        - Key: Name
-          Value: !Sub "spoke-b-nlb-tg-https-${AWS::StackName}"
-
-  SpokeBNLBListenerHTTPS:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      LoadBalancerArn: !Ref SpokeBNLB
-      Port: 443
-      Protocol: TCP
-      DefaultActions:
-        - Type: forward
-          TargetGroupArn: !Ref SpokeBNLBTargetGroupHTTPS
 
 # Edge VPC - Central VPC hosting IGW, Network Firewall, ALB, and NAT Gateway
 # All inbound internet traffic enters through this VPC and is inspected by the firewall before reaching spoke workloads
@@ -615,7 +545,8 @@ Resources:
         - Key: Name
           Value: !Sub "edge-nlb-${AWS::StackName}"
 
-  # IP-type target groups targeting spoke NLB static IPs via TGW
+  # IP-type target group targeting spoke NLB static IPs via TGW (port 80 only)
+  # TLS is terminated at the Edge NLB; all downstream traffic is plaintext HTTP
   # Spoke A NLB: 10.1.1.10, Spoke B NLB: 10.2.1.10 (assigned via SubnetMappings PrivateIPv4Address)
   # AvailabilityZone: "all" is required for cross-VPC IP targets routed via TGW
   EdgeNLBTargetGroupHTTP:
@@ -635,23 +566,6 @@ Resources:
         - Key: Name
           Value: !Sub "e-tg-http-${AWS::StackName}"
 
-  EdgeNLBTargetGroupHTTPS:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: !Sub "e-htps-${AWS::StackName}"
-      Port: 443
-      Protocol: TCP
-      TargetType: ip
-      VpcId: !Ref EdgeVPC
-      Targets:
-        - Id: "10.1.1.10"
-          AvailabilityZone: "all"
-        - Id: "10.2.1.10"
-          AvailabilityZone: "all"
-      Tags:
-        - Key: Name
-          Value: !Sub "e-tg-https-${AWS::StackName}"
-
   EdgeNLBListenerHTTP:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
@@ -662,15 +576,20 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref EdgeNLBTargetGroupHTTP
 
+  # TLS listener terminates TLS using ACM certificate and forwards to port 80 HTTP target group
   EdgeNLBListenerHTTPS:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasNLBCertificate
     Properties:
       LoadBalancerArn: !Ref EdgeNLB
       Port: 443
-      Protocol: TCP
+      Protocol: TLS
+      Certificates:
+        - CertificateArn: !Ref NLBCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref EdgeNLBTargetGroupHTTPS
+          TargetGroupArn: !Ref EdgeNLBTargetGroupHTTP
 
 # Network Firewall - Inspects all inbound internet traffic before it reaches the NLB and spoke workloads
 # The firewall is deployed in the Firewall Subnet of the Edge VPC
@@ -763,6 +682,7 @@ Resources:
             HOME_NET:
               Definition:
                 - 10.0.0.0/8
+                - 100.64.0.0/16
                 - 172.16.0.0/12
                 - 192.168.0.0/16
       Tags:

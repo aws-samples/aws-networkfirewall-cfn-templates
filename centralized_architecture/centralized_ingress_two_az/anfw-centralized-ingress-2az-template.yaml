@@ -8,7 +8,7 @@
 #CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "AWS Network Firewall Demo - Centralized ingress inspection with Edge VPC, Network Firewall, NLB, Transit Gateway, and spoke VPCs with NLBs (single AZ deployment)"
+Description: "AWS Network Firewall Demo - Centralized ingress inspection with Edge VPC, Network Firewall, ALB, Transit Gateway, and spoke VPCs with NLBs (two AZ deployment)"
 
 Metadata:
   "AWS::CloudFormation::Interface":
@@ -16,21 +16,36 @@ Metadata:
       - Label:
           default: "VPC Parameters"
         Parameters:
-          - AvailabilityZoneSelection
+          - AvailabilityZoneSelection1
+          - AvailabilityZoneSelection2
+          - ALBCertificateArn
       - Label:
           default: "EC2 Parameters"
         Parameters:
           - LatestAmiId
 Parameters:
-  AvailabilityZoneSelection:
-    Description: Availability Zone
+  AvailabilityZoneSelection1:
+    Description: First Availability Zone
     Type: AWS::EC2::AvailabilityZone::Name
     Default: us-east-1a
+
+  AvailabilityZoneSelection2:
+    Description: Second Availability Zone
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+
+  ALBCertificateArn:
+    Description: ACM Certificate ARN for the ALB HTTPS listener (leave empty to skip HTTPS listener)
+    Type: String
+    Default: ""
 
   LatestAmiId:
     Description: Latest EC2 AMI from Systems Manager Parameter Store
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
     Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+Conditions:
+  HasALBCertificate: !Not [!Equals [!Ref ALBCertificateArn, ""]]
 
 Resources:
 # Spoke VPC A
@@ -52,11 +67,24 @@ Resources:
         Ref: SpokeVPCA
       CidrBlock: "10.1.1.0/24"
       AvailabilityZone: 
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "spoke-a-workload-${AWS::StackName}"
+          Value: !Sub "spoke-a-workload-1-${AWS::StackName}"
+
+  SubnetAWorkload2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: SpokeVPCA
+      CidrBlock: "10.1.2.0/24"
+      AvailabilityZone: 
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-workload-2-${AWS::StackName}"
 
   SubnetATGW:
     Type: AWS::EC2::Subnet
@@ -65,11 +93,24 @@ Resources:
         Ref: SpokeVPCA
       CidrBlock: "10.1.0.0/28"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "spoke-a-tgw-${AWS::StackName}"
+          Value: !Sub "spoke-a-tgw-1-${AWS::StackName}"
+
+  SubnetATGW2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: SpokeVPCA
+      CidrBlock: "10.1.0.16/28"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-tgw-2-${AWS::StackName}"
 
   SpokeAEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -91,6 +132,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
         SubnetIds: 
           - !Ref SubnetAWorkload
+          - !Ref SubnetAWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCA
 
@@ -103,6 +145,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
         SubnetIds: 
           - !Ref SubnetAWorkload
+          - !Ref SubnetAWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCA
 
@@ -115,6 +158,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
         SubnetIds: 
           - !Ref SubnetAWorkload
+          - !Ref SubnetAWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCA
  
@@ -183,7 +227,7 @@ Resources:
   EC2SubnetA:
     Type: 'AWS::EC2::Instance'
     DependsOn:
-      - EdgeFirewallDefaultRoute
+      - EdgeFirewallDefaultRoute1
       - SubnetAWorkloadDefaultRoute
       - SpokeDefaultRoute
     Properties:
@@ -207,10 +251,41 @@ Resources:
           printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
           systemctl start httpd
           systemctl enable httpd
-          echo "<html><body><h1>Spoke A - ${AvailabilityZoneSelection}</h1></body></html>" > /var/www/html/index.html
+          echo "<html><body><h1>Spoke A - ${AvailabilityZoneSelection1}</h1></body></html>" > /var/www/html/index.html
       Tags:
         - Key: Name
-          Value: !Sub "spoke-a-${AWS::StackName}"
+          Value: !Sub "spoke-a-1-${AWS::StackName}"
+
+  EC2SubnetA2:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - EdgeFirewallDefaultRoute1
+      - SubnetAWorkload2DefaultRoute
+      - SpokeDefaultRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetAWorkload2
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SubnetASecGroup
+      IamInstanceProfile: !Ref SubnetAInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
+          yum install -y httpd mod_ssl
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /etc/pki/tls/private/localhost.key \
+            -out /etc/pki/tls/certs/localhost.crt \
+            -subj "/CN=localhost"
+          printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<html><body><h1>Spoke A - ${AvailabilityZoneSelection2}</h1></body></html>" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-2-${AWS::StackName}"
+
       
 # Spoke VPC B
   SpokeVPCB:
@@ -231,11 +306,24 @@ Resources:
         Ref: SpokeVPCB
       CidrBlock: "10.2.1.0/24"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "spoke-b-workload-${AWS::StackName}"
+          Value: !Sub "spoke-b-workload-1-${AWS::StackName}"
+
+  SubnetBWorkload2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: SpokeVPCB
+      CidrBlock: "10.2.2.0/24"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-workload-2-${AWS::StackName}"
 
   SubnetBTGW:
     Type: AWS::EC2::Subnet
@@ -244,11 +332,24 @@ Resources:
         Ref: SpokeVPCB
       CidrBlock: "10.2.0.0/28"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "spoke-b-tgw-${AWS::StackName}"
+          Value: !Sub "spoke-b-tgw-1-${AWS::StackName}"
+
+  SubnetBTGW2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: SpokeVPCB
+      CidrBlock: "10.2.0.16/28"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-tgw-2-${AWS::StackName}"
 
   SpokeBEndpointSecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -270,6 +371,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
         SubnetIds: 
           - !Ref SubnetBWorkload
+          - !Ref SubnetBWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCB
 
@@ -282,6 +384,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
         SubnetIds: 
           - !Ref SubnetBWorkload
+          - !Ref SubnetBWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCB
 
@@ -294,6 +397,7 @@ Resources:
         ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
         SubnetIds: 
           - !Ref SubnetBWorkload
+          - !Ref SubnetBWorkload2
         VpcEndpointType: Interface
         VpcId: !Ref SpokeVPCB
 
@@ -362,7 +466,7 @@ Resources:
   EC2SubnetB:
     Type: 'AWS::EC2::Instance'
     DependsOn:
-      - EdgeFirewallDefaultRoute
+      - EdgeFirewallDefaultRoute1
       - SubnetBWorkloadDefaultRoute
       - SpokeDefaultRoute
     Properties:
@@ -384,13 +488,43 @@ Resources:
           printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
           systemctl start httpd
           systemctl enable httpd
-          echo "<html><body><h1>Spoke B - ${AvailabilityZoneSelection}</h1></body></html>" > /var/www/html/index.html
+          echo "<html><body><h1>Spoke B - ${AvailabilityZoneSelection1}</h1></body></html>" > /var/www/html/index.html
       Tags:
         - Key: Name
-          Value: !Sub "spoke-b-${AWS::StackName}"
+          Value: !Sub "spoke-b-1-${AWS::StackName}"
 
-# Spoke NLB resources - Internal NLBs with static private IPs front EC2 workloads.
-# Static IPs allow the Edge VPC ALB to register spoke NLB targets directly in CloudFormation.
+  EC2SubnetB2:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - EdgeFirewallDefaultRoute1
+      - SubnetBWorkload2DefaultRoute
+      - SpokeDefaultRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetBWorkload2
+      InstanceType: t2.micro
+      SecurityGroupIds:
+        - !Ref SubnetBSecGroup
+      IamInstanceProfile: !Ref SubnetBInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
+          yum install -y httpd mod_ssl
+          openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /etc/pki/tls/private/localhost.key \
+            -out /etc/pki/tls/certs/localhost.crt \
+            -subj "/CN=localhost"
+          printf '%s\n' 'SSLProtocol -all +TLSv1.2' 'SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384' 'SSLHonorCipherOrder on' > /etc/httpd/conf.d/ssl-hardening.conf
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<html><body><h1>Spoke B - ${AvailabilityZoneSelection2}</h1></body></html>" > /var/www/html/index.html
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-2-${AWS::StackName}"
+
+
+# Spoke NLB resources
   SpokeANLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -400,6 +534,8 @@ Resources:
       SubnetMappings:
         - SubnetId: !Ref SubnetAWorkload
           PrivateIPv4Address: "10.1.1.10"
+        - SubnetId: !Ref SubnetAWorkload2
+          PrivateIPv4Address: "10.1.2.10"
       Tags:
         - Key: Name
           Value: !Sub "spoke-a-nlb-${AWS::StackName}"
@@ -414,6 +550,7 @@ Resources:
       VpcId: !Ref SpokeVPCA
       Targets:
         - Id: !Ref EC2SubnetA
+        - Id: !Ref EC2SubnetA2
       Tags:
         - Key: Name
           Value: !Sub "spoke-a-nlb-tg-http-${AWS::StackName}"
@@ -438,6 +575,7 @@ Resources:
       VpcId: !Ref SpokeVPCA
       Targets:
         - Id: !Ref EC2SubnetA
+        - Id: !Ref EC2SubnetA2
       Tags:
         - Key: Name
           Value: !Sub "spoke-a-nlb-tg-https-${AWS::StackName}"
@@ -461,6 +599,8 @@ Resources:
       SubnetMappings:
         - SubnetId: !Ref SubnetBWorkload
           PrivateIPv4Address: "10.2.1.10"
+        - SubnetId: !Ref SubnetBWorkload2
+          PrivateIPv4Address: "10.2.2.10"
       Tags:
         - Key: Name
           Value: !Sub "spoke-b-nlb-${AWS::StackName}"
@@ -475,6 +615,7 @@ Resources:
       VpcId: !Ref SpokeVPCB
       Targets:
         - Id: !Ref EC2SubnetB
+        - Id: !Ref EC2SubnetB2
       Tags:
         - Key: Name
           Value: !Sub "spoke-b-nlb-tg-http-${AWS::StackName}"
@@ -499,6 +640,7 @@ Resources:
       VpcId: !Ref SpokeVPCB
       Targets:
         - Id: !Ref EC2SubnetB
+        - Id: !Ref EC2SubnetB2
       Tags:
         - Key: Name
           Value: !Sub "spoke-b-nlb-tg-https-${AWS::StackName}"
@@ -513,8 +655,8 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref SpokeBNLBTargetGroupHTTPS
 
-# Edge VPC - Central VPC hosting IGW, Network Firewall, ALB, and NAT Gateway
-# All inbound internet traffic enters through this VPC and is inspected by the firewall before reaching spoke workloads
+
+# Edge VPC
   EdgeVPC:
     Type: AWS::EC2::VPC
     Properties:
@@ -526,44 +668,83 @@ Resources:
         - Key: Name
           Value: !Sub "edge-${AWS::StackName}"
 
-  EdgeFirewallSubnet:
+  EdgeFirewallSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId:
         Ref: EdgeVPC
       CidrBlock: "100.64.0.16/28"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "edge-firewall-${AWS::StackName}"
+          Value: !Sub "edge-firewall-1-${AWS::StackName}"
 
-  EdgePublicSubnet:
+  EdgeFirewallSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: EdgeVPC
+      CidrBlock: "100.64.0.32/28"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-firewall-2-${AWS::StackName}"
+
+  EdgePublicSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId:
         Ref: EdgeVPC
       CidrBlock: "100.64.1.0/24"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "edge-public-${AWS::StackName}"
+          Value: !Sub "edge-public-1-${AWS::StackName}"
 
-  EdgeTGWSubnet:
+  EdgePublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: EdgeVPC
+      CidrBlock: "100.64.2.0/24"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-public-2-${AWS::StackName}"
+
+  EdgeTGWSubnet1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId:
         Ref: EdgeVPC
       CidrBlock: "100.64.0.0/28"
       AvailabilityZone:
-        Ref: AvailabilityZoneSelection
+        Ref: AvailabilityZoneSelection1
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "edge-tgw-${AWS::StackName}"
+          Value: !Sub "edge-tgw-1-${AWS::StackName}"
+
+  EdgeTGWSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: EdgeVPC
+      CidrBlock: "100.64.0.48/28"
+      AvailabilityZone:
+        Ref: AvailabilityZoneSelection2
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-tgw-2-${AWS::StackName}"
 
   EdgeInternetGateway:
     Type: AWS::EC2::InternetGateway
@@ -580,101 +761,147 @@ Resources:
       InternetGatewayId:
         !Ref EdgeInternetGateway
 
-  EdgeNATEIP:
+  EdgeNATEIP1:
     Type: "AWS::EC2::EIP"
     Properties:
       Domain: vpc
 
-  EdgeNATGateway:
+  EdgeNATEIP2:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+
+  EdgeNATGateway1:
     Type: "AWS::EC2::NatGateway"
     Properties:
       AllocationId:
         Fn::GetAtt:
-          - EdgeNATEIP
+          - EdgeNATEIP1
           - AllocationId
       SubnetId:
-        Ref: EdgePublicSubnet
+        Ref: EdgePublicSubnet1
       Tags:
         - Key: Name
-          Value: !Sub "edge-natgw-${AWS::StackName}"
+          Value: !Sub "edge-natgw-1-${AWS::StackName}"
 
-# Edge VPC NLB - Internet-facing NLB receives inspected inbound traffic and forwards to spoke NLBs
-# NLB is used for the single-AZ template because ALBs require a minimum of 2 AZs.
-# The 2AZ template uses an ALB instead, which provides Layer 7 features.
-# Spoke NLBs use static private IPs (via SubnetMappings) so they can be registered as Edge NLB targets directly.
-  EdgeNLB:
+  EdgeNATGateway2:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+          - EdgeNATEIP2
+          - AllocationId
+      SubnetId:
+        Ref: EdgePublicSubnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-natgw-2-${AWS::StackName}"
+
+
+# Edge VPC ALB
+  EdgeALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and HTTPS inbound traffic to ALB"
+      GroupName: !Sub "edge-alb-sg-${AWS::StackName}"
+      VpcId: !Ref EdgeVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          Description: "Allow HTTP from internet"
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          Description: "Allow HTTPS from internet"
+          FromPort: 443
+          ToPort: 443
+
+  EdgeALB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     DependsOn: AttachEdgeGateway
     Properties:
-      Name: !Sub "edge-nlb-${AWS::StackName}"
+      Name: !Sub "edge-alb-${AWS::StackName}"
       Scheme: internet-facing
-      Type: network
+      Type: application
+      SecurityGroups:
+        - !Ref EdgeALBSecurityGroup
       Subnets:
-        - !Ref EdgePublicSubnet
+        - !Ref EdgePublicSubnet1
+        - !Ref EdgePublicSubnet2
       Tags:
         - Key: Name
-          Value: !Sub "edge-nlb-${AWS::StackName}"
+          Value: !Sub "edge-alb-${AWS::StackName}"
 
-  # IP-type target groups targeting spoke NLB static IPs via TGW
-  # Spoke A NLB: 10.1.1.10, Spoke B NLB: 10.2.1.10 (assigned via SubnetMappings PrivateIPv4Address)
-  # AvailabilityZone: "all" is required for cross-VPC IP targets routed via TGW
-  EdgeNLBTargetGroupHTTP:
+  # IP-type target groups targeting all spoke NLB static IPs via TGW
+  EdgeALBTargetGroupHTTP:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
       Name: !Sub "e-http-${AWS::StackName}"
       Port: 80
-      Protocol: TCP
+      Protocol: HTTP
       TargetType: ip
       VpcId: !Ref EdgeVPC
       Targets:
         - Id: "10.1.1.10"
           AvailabilityZone: "all"
+        - Id: "10.1.2.10"
+          AvailabilityZone: "all"
         - Id: "10.2.1.10"
+          AvailabilityZone: "all"
+        - Id: "10.2.2.10"
           AvailabilityZone: "all"
       Tags:
         - Key: Name
           Value: !Sub "e-tg-http-${AWS::StackName}"
 
-  EdgeNLBTargetGroupHTTPS:
+  EdgeALBTargetGroupHTTPS:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Condition: HasALBCertificate
     Properties:
       Name: !Sub "e-htps-${AWS::StackName}"
       Port: 443
-      Protocol: TCP
+      Protocol: HTTPS
       TargetType: ip
       VpcId: !Ref EdgeVPC
       Targets:
         - Id: "10.1.1.10"
           AvailabilityZone: "all"
+        - Id: "10.1.2.10"
+          AvailabilityZone: "all"
         - Id: "10.2.1.10"
+          AvailabilityZone: "all"
+        - Id: "10.2.2.10"
           AvailabilityZone: "all"
       Tags:
         - Key: Name
           Value: !Sub "e-tg-https-${AWS::StackName}"
 
-  EdgeNLBListenerHTTP:
+  EdgeALBListenerHTTP:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
-      LoadBalancerArn: !Ref EdgeNLB
+      LoadBalancerArn: !Ref EdgeALB
       Port: 80
-      Protocol: TCP
+      Protocol: HTTP
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref EdgeNLBTargetGroupHTTP
+          TargetGroupArn: !Ref EdgeALBTargetGroupHTTP
 
-  EdgeNLBListenerHTTPS:
+  EdgeALBListenerHTTPS:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: HasALBCertificate
     Properties:
-      LoadBalancerArn: !Ref EdgeNLB
+      LoadBalancerArn: !Ref EdgeALB
       Port: 443
-      Protocol: TCP
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !Ref ALBCertificateArn
       DefaultActions:
         - Type: forward
-          TargetGroupArn: !Ref EdgeNLBTargetGroupHTTPS
+          TargetGroupArn: !Ref EdgeALBTargetGroupHTTPS
 
-# Network Firewall - Inspects all inbound internet traffic before it reaches the NLB and spoke workloads
-# The firewall is deployed in the Firewall Subnet of the Edge VPC
 
+# Network Firewall
   IngressAllowListRuleGroup:
     Type: 'AWS::NetworkFirewall::RuleGroup'
     Properties:
@@ -776,7 +1003,8 @@ Resources:
       FirewallPolicyArn: !Ref IngressFirewallPolicy
       VpcId: !Ref EdgeVPC
       SubnetMappings:
-        - SubnetId: !Ref EdgeFirewallSubnet
+        - SubnetId: !Ref EdgeFirewallSubnet1
+        - SubnetId: !Ref EdgeFirewallSubnet2
       Tags:
         - Key: Name
           Value: !Sub "ingress-firewall-${AWS::StackName}"
@@ -818,8 +1046,8 @@ Resources:
             LogDestination:
               logGroup: !Sub "/${AWS::StackName}/ingress-fw/alert"
 
+
 # Transit Gateway - Connects Edge VPC to Spoke VPCs
-# Spoke traffic routes through TGW to the Edge VPC for inspection, and return traffic flows back via TGW
   CentralTransitGateway:
     Type: "AWS::EC2::TransitGateway"
     Properties:
@@ -839,7 +1067,8 @@ Resources:
     Type: "AWS::EC2::TransitGatewayAttachment"
     Properties:
       SubnetIds:
-        - !Ref EdgeTGWSubnet
+        - !Ref EdgeTGWSubnet1
+        - !Ref EdgeTGWSubnet2
       Options:
         ApplianceModeSupport: enable
       Tags:
@@ -853,6 +1082,7 @@ Resources:
     Properties:
       SubnetIds:
         - !Ref SubnetATGW
+        - !Ref SubnetATGW2
       Tags:
         - Key: Name
           Value: !Sub "spoke-a-attach-${AWS::StackName}"
@@ -864,6 +1094,7 @@ Resources:
     Properties:
       SubnetIds:
         - !Ref SubnetBTGW
+        - !Ref SubnetBTGW2
       Tags:
         - Key: Name
           Value: !Sub "spoke-b-attach-${AWS::StackName}"
@@ -928,17 +1159,9 @@ Resources:
       TransitGatewayAttachmentId: !Ref AttachEdgeVPC
       TransitGatewayRouteTableId: !Ref SpokeRouteTable
 
-# Edge VPC Route Tables - Ingress-specific routing for symmetric firewall inspection
-# Key differences from the egress template:
-#   - Public Subnet routes 0.0.0.0/0 → Firewall Endpoint for symmetric ingress inspection
-#   - Firewall Subnet routes 0.0.0.0/0 → IGW as the exit point for inspected traffic
-#   - TGW Subnet routes 0.0.0.0/0 → NAT Gateway for spoke egress NAT translation
-#   - IGW Ingress Route Table steers inbound traffic through firewall before reaching NLB
 
-  # IGW Ingress Route Table - Associated with the Internet Gateway
-  # Routes inbound traffic destined for the Public Subnet through the firewall endpoint
-  # This is the key construct enabling ingress inspection: traffic arriving at the IGW
-  # for the NLB (in the Public Subnet) is redirected to the firewall first
+# Edge VPC Route Tables
+  # IGW Ingress Route Table
   EdgeIGWIngressRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
@@ -953,8 +1176,8 @@ Resources:
       RouteTableId: !Ref EdgeIGWIngressRouteTable
       GatewayId: !Ref EdgeInternetGateway
 
-  # Route traffic destined for the Public Subnet CIDR through the firewall endpoint
-  EdgeIGWIngressPublicSubnetRoute:
+  # Route traffic destined for Public Subnet AZ1 CIDR through the AZ1 firewall endpoint
+  EdgeIGWIngressPublicSubnet1Route:
     Type: AWS::EC2::Route
     DependsOn: IngressFirewall
     Properties:
@@ -962,121 +1185,201 @@ Resources:
       VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
       RouteTableId: !Ref EdgeIGWIngressRouteTable
 
-  # Firewall Subnet Route Table
-  # 0.0.0.0/0 → IGW: After the firewall inspects traffic (both ingress return from NLB and
-  # NAT'd spoke egress), the Firewall Subnet forwards it to the IGW for internet delivery.
-  # This is the exit point for ALL inspected outbound traffic.
-  # 10.0.0.0/8 → TGW: Forward inspected inbound traffic to spoke VPCs via Transit Gateway.
-  EdgeFirewallRouteTable:
+  # Route traffic destined for Public Subnet AZ2 CIDR through the AZ2 firewall endpoint
+  EdgeIGWIngressPublicSubnet2Route:
+    Type: AWS::EC2::Route
+    DependsOn: IngressFirewall
+    Properties:
+      DestinationCidrBlock: "100.64.2.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt IngressFirewall.EndpointIds]]]
+      RouteTableId: !Ref EdgeIGWIngressRouteTable
+
+  # Firewall Subnet AZ1 Route Table: 0.0.0.0/0 → IGW, 10.0.0.0/8 → TGW
+  EdgeFirewallRouteTable1:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref EdgeVPC
       Tags:
         - Key: Name
-          Value: !Sub "edge-firewall-route-table-${AWS::StackName}"
+          Value: !Sub "edge-firewall-route-table-1-${AWS::StackName}"
 
-  EdgeFirewallRouteTableAssociation:
+  EdgeFirewallRouteTable1Association:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: EdgeFirewallSubnet
+    DependsOn: EdgeFirewallSubnet1
     Properties:
-      RouteTableId: !Ref EdgeFirewallRouteTable
-      SubnetId: !Ref EdgeFirewallSubnet
+      RouteTableId: !Ref EdgeFirewallRouteTable1
+      SubnetId: !Ref EdgeFirewallSubnet1
 
-  EdgeFirewallDefaultRoute:
+  EdgeFirewallDefaultRoute1:
     Type: AWS::EC2::Route
     DependsOn: AttachEdgeGateway
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
       GatewayId: !Ref EdgeInternetGateway
-      RouteTableId: !Ref EdgeFirewallRouteTable
+      RouteTableId: !Ref EdgeFirewallRouteTable1
 
-  EdgeFirewallTGWRoute:
+  EdgeFirewallTGWRoute1:
     Type: AWS::EC2::Route
     DependsOn: AttachEdgeVPC
     Properties:
       DestinationCidrBlock: "10.0.0.0/8"
       TransitGatewayId: !Ref CentralTransitGateway
-      RouteTableId: !Ref EdgeFirewallRouteTable
+      RouteTableId: !Ref EdgeFirewallRouteTable1
 
-  # Public Subnet Route Table
-  # 0.0.0.0/0 → Firewall Endpoint: CRITICAL for symmetric ingress inspection.
-  # NLB return traffic and NAT Gateway egress traffic both pass through the firewall
-  # before reaching the Firewall Subnet (which then routes to the IGW).
-  # Without this route, NLB return traffic would bypass the firewall and go directly
-  # to the IGW, causing the stateful firewall to see only the inbound direction
-  # and drop return packets (asymmetric routing).
-  # 10.0.0.0/8 → TGW: Edge NLB-to-spoke traffic goes directly to TGW.
-  EdgePublicRouteTable:
+  # Firewall Subnet AZ2 Route Table
+  EdgeFirewallRouteTable2:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref EdgeVPC
       Tags:
         - Key: Name
-          Value: !Sub "edge-public-route-table-${AWS::StackName}"
+          Value: !Sub "edge-firewall-route-table-2-${AWS::StackName}"
 
-  EdgePublicRouteTableAssociation:
+  EdgeFirewallRouteTable2Association:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: EdgePublicSubnet
+    DependsOn: EdgeFirewallSubnet2
     Properties:
-      RouteTableId: !Ref EdgePublicRouteTable
-      SubnetId: !Ref EdgePublicSubnet
+      RouteTableId: !Ref EdgeFirewallRouteTable2
+      SubnetId: !Ref EdgeFirewallSubnet2
 
-  EdgePublicDefaultRoute:
+  EdgeFirewallDefaultRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: AttachEdgeGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref EdgeInternetGateway
+      RouteTableId: !Ref EdgeFirewallRouteTable2
+
+  EdgeFirewallTGWRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: AttachEdgeVPC
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref EdgeFirewallRouteTable2
+
+  # Public Subnet AZ1 Route Table: 0.0.0.0/0 → FW Endpoint (symmetric inspection)
+  EdgePublicRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EdgeVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-public-route-table-1-${AWS::StackName}"
+
+  EdgePublicRouteTable1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: EdgePublicSubnet1
+    Properties:
+      RouteTableId: !Ref EdgePublicRouteTable1
+      SubnetId: !Ref EdgePublicSubnet1
+
+  EdgePublicDefaultRoute1:
     Type: AWS::EC2::Route
     DependsOn: IngressFirewall
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
       VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
-      RouteTableId: !Ref EdgePublicRouteTable
+      RouteTableId: !Ref EdgePublicRouteTable1
 
-  EdgePublicTGWRoute:
+  EdgePublicTGWRoute1:
     Type: AWS::EC2::Route
     DependsOn: AttachEdgeVPC
     Properties:
       DestinationCidrBlock: "10.0.0.0/8"
       TransitGatewayId: !Ref CentralTransitGateway
-      RouteTableId: !Ref EdgePublicRouteTable
+      RouteTableId: !Ref EdgePublicRouteTable1
 
-  # TGW Subnet Route Table
-  # 0.0.0.0/0 → NAT Gateway: Spoke egress traffic (e.g., yum install, SSM) enters the
-  # Edge VPC via TGW and is sent to the NAT Gateway for source address translation.
-  # The NAT Gateway's outbound traffic then follows the Public Subnet route table
-  # (0.0.0.0/0 → Firewall Endpoint), ensuring spoke egress is inspected symmetrically.
-  EdgeTGWRouteTable:
+  # Public Subnet AZ2 Route Table
+  EdgePublicRouteTable2:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref EdgeVPC
       Tags:
         - Key: Name
-          Value: !Sub "edge-tgw-route-table-${AWS::StackName}"
+          Value: !Sub "edge-public-route-table-2-${AWS::StackName}"
 
-  EdgeTGWRouteTableAssociation:
+  EdgePublicRouteTable2Association:
     Type: AWS::EC2::SubnetRouteTableAssociation
-    DependsOn: EdgeTGWSubnet
+    DependsOn: EdgePublicSubnet2
     Properties:
-      RouteTableId: !Ref EdgeTGWRouteTable
-      SubnetId: !Ref EdgeTGWSubnet
+      RouteTableId: !Ref EdgePublicRouteTable2
+      SubnetId: !Ref EdgePublicSubnet2
 
-  EdgeTGWDefaultRoute:
+  EdgePublicDefaultRoute2:
     Type: AWS::EC2::Route
-    DependsOn: EdgeNATGateway
+    DependsOn: IngressFirewall
     Properties:
       DestinationCidrBlock: "0.0.0.0/0"
-      NatGatewayId: !Ref EdgeNATGateway
-      RouteTableId: !Ref EdgeTGWRouteTable
+      VpcEndpointId: !Select [1, !Split [":", !Select [1, !GetAtt IngressFirewall.EndpointIds]]]
+      RouteTableId: !Ref EdgePublicRouteTable2
+
+  EdgePublicTGWRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: AttachEdgeVPC
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref EdgePublicRouteTable2
+
+  # TGW Subnet AZ1 Route Table: 0.0.0.0/0 → NAT GW (spoke egress)
+  EdgeTGWRouteTable1:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EdgeVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-tgw-route-table-1-${AWS::StackName}"
+
+  EdgeTGWRouteTable1Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: EdgeTGWSubnet1
+    Properties:
+      RouteTableId: !Ref EdgeTGWRouteTable1
+      SubnetId: !Ref EdgeTGWSubnet1
+
+  EdgeTGWDefaultRoute1:
+    Type: AWS::EC2::Route
+    DependsOn: EdgeNATGateway1
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref EdgeNATGateway1
+      RouteTableId: !Ref EdgeTGWRouteTable1
+
+  # TGW Subnet AZ2 Route Table
+  EdgeTGWRouteTable2:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EdgeVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "edge-tgw-route-table-2-${AWS::StackName}"
+
+  EdgeTGWRouteTable2Association:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: EdgeTGWSubnet2
+    Properties:
+      RouteTableId: !Ref EdgeTGWRouteTable2
+      SubnetId: !Ref EdgeTGWSubnet2
+
+  EdgeTGWDefaultRoute2:
+    Type: AWS::EC2::Route
+    DependsOn: EdgeNATGateway2
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref EdgeNATGateway2
+      RouteTableId: !Ref EdgeTGWRouteTable2
+
 
 # Spoke VPC Route Tables
-# Workload subnets route all traffic to TGW for centralized inspection
-# TGW subnets use default local routes only
-
-  # Spoke A workload subnet route table
+  # Spoke A workload subnet AZ1 route table
   SubnetAWorkloadRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref SpokeVPCA
       Tags:
         - Key: Name
-          Value: !Sub "spoke-a-workload-route-table-${AWS::StackName}"
+          Value: !Sub "spoke-a-workload-route-table-1-${AWS::StackName}"
 
   SubnetAWorkloadRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -1093,14 +1396,38 @@ Resources:
       TransitGatewayId: !Ref CentralTransitGateway
       RouteTableId: !Ref SubnetAWorkloadRouteTable
 
-  # Spoke B workload subnet route table
+  # Spoke A workload subnet AZ2 route table
+  SubnetAWorkload2RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-workload-route-table-2-${AWS::StackName}"
+
+  SubnetAWorkload2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetAWorkload2
+    Properties:
+      RouteTableId: !Ref SubnetAWorkload2RouteTable
+      SubnetId: !Ref SubnetAWorkload2
+
+  SubnetAWorkload2DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachSpokeVPCA
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref SubnetAWorkload2RouteTable
+
+  # Spoke B workload subnet AZ1 route table
   SubnetBWorkloadRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref SpokeVPCB
       Tags:
         - Key: Name
-          Value: !Sub "spoke-b-workload-route-table-${AWS::StackName}"
+          Value: !Sub "spoke-b-workload-route-table-1-${AWS::StackName}"
 
   SubnetBWorkloadRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -1117,6 +1444,30 @@ Resources:
       TransitGatewayId: !Ref CentralTransitGateway
       RouteTableId: !Ref SubnetBWorkloadRouteTable
 
+  # Spoke B workload subnet AZ2 route table
+  SubnetBWorkload2RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-workload-route-table-2-${AWS::StackName}"
+
+  SubnetBWorkload2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetBWorkload2
+    Properties:
+      RouteTableId: !Ref SubnetBWorkload2RouteTable
+      SubnetId: !Ref SubnetBWorkload2
+
+  SubnetBWorkload2DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachSpokeVPCB
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref SubnetBWorkload2RouteTable
+
   # Dedicated route tables for TGW subnets (default local routes only)
   SubnetATGWRouteTable:
     Type: AWS::EC2::RouteTable
@@ -1124,7 +1475,7 @@ Resources:
       VpcId: !Ref SpokeVPCA
       Tags:
         - Key: Name
-          Value: !Sub "spoke-a-tgw-route-table-${AWS::StackName}"
+          Value: !Sub "spoke-a-tgw-route-table-1-${AWS::StackName}"
 
   SubnetATGWRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -1133,13 +1484,28 @@ Resources:
       RouteTableId: !Ref SubnetATGWRouteTable
       SubnetId: !Ref SubnetATGW
 
+  SubnetATGW2RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-tgw-route-table-2-${AWS::StackName}"
+
+  SubnetATGW2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetATGW2
+    Properties:
+      RouteTableId: !Ref SubnetATGW2RouteTable
+      SubnetId: !Ref SubnetATGW2
+
   SubnetBTGWRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref SpokeVPCB
       Tags:
         - Key: Name
-          Value: !Sub "spoke-b-tgw-route-table-${AWS::StackName}"
+          Value: !Sub "spoke-b-tgw-route-table-1-${AWS::StackName}"
 
   SubnetBTGWRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
@@ -1148,30 +1514,39 @@ Resources:
       RouteTableId: !Ref SubnetBTGWRouteTable
       SubnetId: !Ref SubnetBTGW
 
-# ============================================================================
-# Traffic Flow Summary:
-#
-# INGRESS PATH:
-#   Internet → IGW → (IGW Ingress RT: Public CIDR → FW Endpoint) → Firewall
-#   → (local route) → NLB in Public Subnet → (Public RT: 10.0.0.0/8 → TGW)
-#   → TGW → Spoke NLB → EC2 httpd
-#
-# INGRESS RETURN (symmetric through firewall):
-#   EC2 → Spoke NLB → TGW → Edge NLB → (Public RT: 0.0.0.0/0 → FW Endpoint)
-#   → Firewall → (Firewall RT: 0.0.0.0/0 → IGW) → Internet
-#
-# SPOKE EGRESS (e.g., yum install, SSM):
-#   Spoke EC2 → TGW → (TGW Subnet RT: 0.0.0.0/0 → NAT GW) → NAT Gateway
-#   → (Public RT: 0.0.0.0/0 → FW Endpoint) → Firewall
-#   → (Firewall RT: 0.0.0.0/0 → IGW) → Internet
-# ============================================================================
+  SubnetBTGW2RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-tgw-route-table-2-${AWS::StackName}"
+
+  SubnetBTGW2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    DependsOn: SubnetBTGW2
+    Properties:
+      RouteTableId: !Ref SubnetBTGW2RouteTable
+      SubnetId: !Ref SubnetBTGW2
 
 Outputs:
-  IngressFirewallEndpoint:
-    Description: Ingress Network Firewall Endpoint ID
+  EdgeALBDNSName:
+    Description: Edge ALB DNS Name
+    Value: !GetAtt EdgeALB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-EdgeALBDNSName"
+
+  IngressFirewallEndpointAZ1:
+    Description: Ingress Network Firewall Endpoint ID (AZ1)
     Value: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
     Export:
-      Name: !Sub "${AWS::StackName}-IngressFirewallEndpoint"
+      Name: !Sub "${AWS::StackName}-IngressFirewallEndpointAZ1"
+
+  IngressFirewallEndpointAZ2:
+    Description: Ingress Network Firewall Endpoint ID (AZ2)
+    Value: !Select [1, !Split [":", !Select [1, !GetAtt IngressFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallEndpointAZ2"
 
   TransitGatewayId:
     Description: Transit Gateway ID
@@ -1179,62 +1554,8 @@ Outputs:
     Export:
       Name: !Sub "${AWS::StackName}-TransitGatewayId"
 
-  EdgeNLBDNSName:
-    Description: Edge NLB DNS Name
-    Value: !GetAtt EdgeNLB.DNSName
+  EdgeALBSecurityGroupId:
+    Description: Edge ALB Security Group ID
+    Value: !Ref EdgeALBSecurityGroup
     Export:
-      Name: !Sub "${AWS::StackName}-EdgeNLBDNSName"
-
-  EdgeNATGatewayId:
-    Description: Edge NAT Gateway ID
-    Value: !Ref EdgeNATGateway
-    Export:
-      Name: !Sub "${AWS::StackName}-EdgeNATGateway"
-
-  EdgeNATEIPAllocationId:
-    Description: Edge NAT Gateway Elastic IP
-    Value: !Ref EdgeNATEIP
-    Export:
-      Name: !Sub "${AWS::StackName}-EdgeNATEIP"
-
-  SpokeASecurityGroupId:
-    Description: Spoke A Security Group ID
-    Value: !Ref SubnetASecGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-SpokeASecGroup"
-
-  SpokeBSecurityGroupId:
-    Description: Spoke B Security Group ID
-    Value: !Ref SubnetBSecGroup
-    Export:
-      Name: !Sub "${AWS::StackName}-SpokeBSecGroup"
-
-  SpokeANLBDNSName:
-    Description: "Spoke A NLB DNS Name (static IP: 10.1.1.10)"
-    Value: !GetAtt SpokeANLB.DNSName
-    Export:
-      Name: !Sub "${AWS::StackName}-SpokeANLBDNSName"
-
-  SpokeBNLBDNSName:
-    Description: "Spoke B NLB DNS Name (static IP: 10.2.1.10)"
-    Value: !GetAtt SpokeBNLB.DNSName
-    Export:
-      Name: !Sub "${AWS::StackName}-SpokeBNLBDNSName"
-
-  SpokeRouteTableId:
-    Description: Spoke TGW Route Table ID
-    Value: !Ref SpokeRouteTable
-    Export:
-      Name: !Sub "${AWS::StackName}-SpokeRouteTable"
-
-  InspectionRouteTableId:
-    Description: Inspection TGW Route Table ID
-    Value: !Ref InspectionRouteTable
-    Export:
-      Name: !Sub "${AWS::StackName}-InspectionRouteTable"
-
-  EdgeVPCAttachmentId:
-    Description: Edge VPC TGW Attachment ID
-    Value: !Ref AttachEdgeVPC
-    Export:
-      Name: !Sub "${AWS::StackName}-EdgeVPCAttachment"
+      Name: !Sub "${AWS::StackName}-EdgeALBSecGroup"

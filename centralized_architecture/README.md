@@ -16,18 +16,8 @@ This folder contains two CloudFormation templates that deploy the same centraliz
 - **Use Case:** Production environments requiring high availability
 - **Resources:** Components distributed across two Availability Zones
 
-## Architecture Components
 
-Both templates create:
-
-**Inspection VPC** - Centralized VPC for both East-West and Egress traffic inspection
-- Transit Gateway subnet
-- Firewall subnet (contains AWS Network Firewall endpoints)
-- Public subnet (contains NAT Gateway(s) for Internet access)
-
-**Spoke VPCs** - Example workload VPCs that route traffic through the inspection VPC
-
-### Centralized Ingress Inspection
+## Ingress-only Inspection
 
 Templates that add ingress traffic inspection to the centralized model. All inbound internet traffic is routed through AWS Network Firewall in an Edge VPC before reaching spoke VPC workloads via Transit Gateway. TLS is terminated at the Edge load balancer; downstream traffic to spoke NLBs and EC2 instances uses plaintext HTTP.
 
@@ -40,6 +30,18 @@ Templates that add ingress traffic inspection to the centralized model. All inbo
 - **Template:** `anfw-centralized-ingress-2az-template.yaml`
 - **Use Case:** Production environments requiring high availability
 - **Edge LB:** Internet-facing ALB with HTTPS termination across two AZs
+
+
+## Architecture Components
+
+Both templates create:
+
+**Inspection VPC** - Centralized VPC for both East-West and Egress traffic inspection
+- Transit Gateway subnet
+- Firewall subnet (contains AWS Network Firewall endpoints)
+- Public subnet (contains NAT Gateway(s) for Internet access)
+
+**Spoke VPCs** - Example workload VPCs that route traffic through the inspection VPC
 
 
 ## Additional Resources

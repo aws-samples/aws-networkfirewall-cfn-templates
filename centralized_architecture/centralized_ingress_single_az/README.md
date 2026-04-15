@@ -65,7 +65,7 @@ Two example workload VPCs demonstrating end-to-end ingress traffic flow:
 
 > **Symmetric routing**: Inbound traffic goes IGW → Firewall → NLB, and return traffic goes NLB → Firewall → IGW. The firewall sees both directions of every flow.
 
-### Spoke Egress Path (e.g., yum install, SSM)
+### Spoke Egress Path (e.g., packages install, SSM)
 1. Spoke EC2 initiates outbound connection → Spoke route table sends 0.0.0.0/0 → TGW
 2. TGW Subnet route table sends 0.0.0.0/0 → **NAT Gateway** (source IP translated)
 3. NAT Gateway outbound follows Public Subnet route: 0.0.0.0/0 → **Firewall Endpoint**
@@ -74,7 +74,7 @@ Two example workload VPCs demonstrating end-to-end ingress traffic flow:
 
 ## Key Routing Design
 
-The routing differs from the existing egress/east-west templates to support symmetric ingress inspection:
+The routing support symmetric ingress inspection:
 
 | Route Table | Default Route (0.0.0.0/0) | Purpose |
 |---|---|---|
@@ -87,7 +87,7 @@ The routing differs from the existing egress/east-west templates to support symm
 ## Deployment Instructions
 
 1. Ensure you have appropriate AWS permissions
-2. Provision or import an ACM certificate for the Edge NLB TLS listener
+2. (Optional) Provision or import an ACM certificate for the Edge NLB TLS listener - if not provided, the template will skip the TLS listener
 3. Deploy the CloudFormation template:
    ```bash
    aws cloudformation create-stack \
@@ -108,9 +108,28 @@ The routing differs from the existing egress/east-west templates to support symm
 
 - **Single AZ Limitation** - This deployment lacks high availability and should not be used in production. Designed for development, testing, and learning environments.
 - **NLB vs ALB** - The 1AZ template uses an internet-facing NLB because ALBs require a minimum of 2 AZs. The [Two AZ Deployment](../centralized_ingress_two_az/) uses an ALB for Layer 7 capabilities.
-- **TLS Termination** - TLS is terminated at the Edge NLB using an ACM certificate. All downstream traffic to spoke NLBs and EC2 instances is plaintext HTTP on port 80.
+- **(Optional) TLS Termination** - TLS is terminated at the Edge NLB using an ACM certificate. All downstream traffic to spoke NLBs and EC2 instances is plaintext HTTP on port 80.
 - **Spoke NLB Static IPs** - Spoke NLBs use static private IPs via SubnetMappings, pre-registered as Edge NLB targets. No manual target registration is needed.
 - **Symmetric Inspection** - The Public Subnet routes 0.0.0.0/0 to the Firewall Endpoint (not the IGW) to ensure return traffic passes through the firewall, avoiding asymmetric routing.
+
+## Enabling the Allow-List Rule Group
+
+By default, only the log-only rule group is active — it alerts on inbound traffic patterns without blocking anything. The template also creates a comprehensive allow-list rule group (`IngressAllowListRuleGroup`) that is defined but not referenced in the firewall policy.
+
+When you're ready to move beyond log-only mode and enforce ingress filtering:
+
+1. Open the [Network Firewall console](https://console.aws.amazon.com/vpc/home#NetworkFirewallPolicies) and select the `ingress-firewall-policy-<stack-name>` policy
+2. Under **Stateful rule group references**, click **Add rule group** and select `ingress-allow-list-<stack-name>`
+3. Set its priority to a value higher than the log-only group (e.g., 100 if log-only is at 50) so alerts fire before enforcement
+4. Save the policy — the firewall endpoints will sync within a few minutes
+
+The allow-list rules will:
+- **Pass** inbound HTTP (port 80) and HTTPS (port 443) to HOME_NET
+- **Pass** established return traffic from HOME_NET
+- **Alert** on traffic from RU/CN geolocations
+- **Drop** all other inbound TCP, UDP, ICMP, and IP traffic
+
+> **Note:** The log-only group fires first (lower priority number), so you retain full alert visibility even after enabling enforcement. To revert to log-only mode, remove the allow-list reference from the policy. If you added the allow-list via the console (outside CloudFormation), remember to remove it before deleting the stack to avoid delete failures.
 
 ## Production Considerations
 

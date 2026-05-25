@@ -24,12 +24,12 @@ Templates that add ingress traffic inspection to the centralized model. All inbo
 #### [Single AZ Ingress Deployment](centralized_ingress_single_az/)
 - **Template:** `anfw-centralized-ingress-1az-template.yaml`
 - **Use Case:** Testing and proof-of-concept environments
-- **Edge LB:** Internet-facing NLB with TLS termination (ALBs require 2 AZs)
+- **- **Edge LB:** Internet-facing NLB with TLS termination across two AZs
 
 #### [Two AZ Ingress Deployment](centralized_ingress_two_az/)
 - **Template:** `anfw-centralized-ingress-2az-template.yaml`
 - **Use Case:** Production environments requiring high availability
-- **Edge LB:** Internet-facing ALB with HTTPS termination across two AZs
+- **Edge LB:** Internet-facing NLB with TLS termination across two AZs
 
 
 ## Architecture Components

@@ -133,7 +133,7 @@ Resources:
       RoleName: !Sub "subnet-a-role-${AWS::StackName}"
       Path: "/"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -154,7 +154,7 @@ Resources:
   SubnetASecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
+      GroupDescription: "ICMP access from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
       GroupName: !Sub "spoke-a-sec-group-${AWS::StackName}"
       VpcId: !Ref SpokeVPCA
       SecurityGroupIngress:
@@ -196,7 +196,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           # Wait for internet connectivity (egress path via NAT GW may take time to converge)
-          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
+          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
           yum install -y httpd
           systemctl start httpd
           systemctl enable httpd
@@ -296,7 +296,7 @@ Resources:
       RoleName: !Sub "subnet-b-role-${AWS::StackName}"
       Path: "/"
       ManagedPolicyArns:
-        - "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM"
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -317,7 +317,7 @@ Resources:
   SubnetBSecGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "ICMP acess from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
+      GroupDescription: "ICMP access from 10.0.0.0/8 and inspection VPC, HTTP from inspection VPC and spoke VPC"
       GroupName: !Sub "spoke-b-sec-group-${AWS::StackName}"
       VpcId: !Ref SpokeVPCB
       SecurityGroupIngress:
@@ -358,7 +358,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-us-east-1.s3.dualstack.us-east-1.amazonaws.com && break || sleep 10; done
+          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
           yum install -y httpd
           systemctl start httpd
           systemctl enable httpd
@@ -532,6 +532,24 @@ Resources:
 # NLB is used for the single-AZ template because ALBs require a minimum of 2 AZs.
 # The 2AZ template uses an ALB instead, which provides Layer 7 features.
 # Spoke NLBs use static private IPs (via SubnetMappings) so they can be registered as Edge NLB targets directly.
+  EdgeNLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow HTTP and TLS inbound traffic to Edge NLB"
+      GroupName: !Sub "edge-nlb-sg-${AWS::StackName}"
+      VpcId: !Ref EdgeVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          Description: "Allow HTTP from internet"
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: tcp
+          CidrIp: 0.0.0.0/0
+          Description: "Allow TLS from internet"
+          FromPort: 443
+          ToPort: 443
+
   EdgeNLB:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     DependsOn: AttachEdgeGateway
@@ -539,6 +557,8 @@ Resources:
       Name: !Sub "edge-nlb-${AWS::StackName}"
       Scheme: internet-facing
       Type: network
+      SecurityGroups:
+        - !Ref EdgeNLBSecurityGroup
       Subnets:
         - !Ref EdgePublicSubnet
       Tags:

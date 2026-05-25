@@ -6,14 +6,14 @@ This template deploys AWS Network Firewall in a centralized ingress inspection a
 
 ## Architecture Overview
 
-This multi-AZ deployment creates a centralized ingress inspection model using an Edge VPC with an internet-facing Application Load Balancer, AWS Network Firewall endpoints in each AZ, and AWS Transit Gateway. Inbound traffic from the internet enters through the Edge VPC Internet Gateway, is steered through the Network Firewall for inspection via an IGW Ingress Route Table, and then reaches the Edge ALB. The ALB terminates TLS and forwards plaintext HTTP to spoke VPC NLBs via Transit Gateway, which distribute traffic to EC2 instances running httpd.
+This multi-AZ deployment creates a centralized ingress inspection model using an Edge VPC with an internet-facing Network Load Balancer, AWS Network Firewall endpoints in each AZ, and AWS Transit Gateway. Inbound traffic from the internet enters through the Edge VPC Internet Gateway, is steered through the Network Firewall for inspection via an IGW Ingress Route Table, and then reaches the Edge NLB. The NLB terminates TLS (optional) and forwards plaintext TCP to spoke VPC NLBs via Transit Gateway, which distribute traffic to EC2 instances running httpd.
 
 ## Resources Created
 
 ### Edge VPC (100.64.0.0/16)
 Centralized VPC for ingress traffic inspection across two AZs:
 - **Firewall Subnets** (100.64.0.16/28, 100.64.0.32/28) - Contains AWS Network Firewall endpoints in each AZ
-- **Public Subnets** (100.64.1.0/24, 100.64.2.0/24) - Contains the internet-facing ALB and NAT Gateways
+- **Public Subnets** (100.64.1.0/24, 100.64.2.0/24) - Contains the internet-facing NLB and NAT Gateways
 - **TGW Subnets** (100.64.0.0/28, 100.64.0.48/28) - Attachment points for Transit Gateway
 - **Internet Gateway** - Entry point for inbound internet traffic
 - **NAT Gateways** (one per AZ) - Provide outbound internet access for spoke EC2 instances (package installation, SSM)
@@ -33,12 +33,12 @@ Two example workload VPCs demonstrating end-to-end ingress traffic flow:
 - SSM VPC endpoints for instance management
 - Security groups allowing ICMP and HTTP from required CIDRs
 
-### Edge ALB
-- Internet-facing Application Load Balancer in the Edge VPC Public Subnets
-- (Optional) HTTPS listener on port 443 that terminates TLS using an ACM certificate and forwards to port 80 (conditional on `ALBCertificateArn` parameter)
-- HTTP listener on port 80
-- Single IP-type target group (port 80, HTTP) with spoke NLB static IPs pre-registered
-- Security group allowing inbound HTTP and HTTPS from 0.0.0.0/0
+### Edge NLB
+- Internet-facing Network Load Balancer in the Edge VPC Public Subnets
+- (Optional) TLS listener on port 443 that terminates TLS using an ACM certificate and forwards to port 80 (conditional on `NLBCertificateArn` parameter)
+- TCP listener on port 80
+- Single IP-type target group (port 80, TCP) with spoke NLB static IPs pre-registered
+- Security group allowing inbound TCP 80 and 443 from 0.0.0.0/0
 
 ### Transit Gateway
 - Central routing hub connecting Edge VPC and spoke VPCs
@@ -52,17 +52,17 @@ Two example workload VPCs demonstrating end-to-end ingress traffic flow:
 1. Client request arrives at the Internet Gateway
 2. IGW Ingress Route Table steers traffic to the Network Firewall endpoint in the same AZ (Public Subnet CIDR → Firewall Endpoint)
 3. Network Firewall inspects the inbound traffic using Suricata stateful rules
-4. Inspected traffic reaches the Edge ALB in the Public Subnet via VPC local route
-5. ALB terminates TLS (if HTTPS) and forwards HTTP to spoke NLB IPs via Transit Gateway (Public Subnet routes 10.0.0.0/8 → TGW)
+4. Inspected traffic reaches the Edge NLB in the Public Subnet via VPC local route
+5. NLB terminates TLS (if HTTPS) and forwards HTTP to spoke NLB IPs via Transit Gateway (Public Subnet routes 10.0.0.0/8 → TGW)
 6. Spoke NLB distributes traffic to EC2 instances running httpd on port 80
 
 ### Ingress Return Path (Application → Internet) — Symmetric
-1. EC2 response returns through the spoke NLB → Transit Gateway → Edge ALB
-2. Edge ALB sends the response to the client; Public Subnet routes 0.0.0.0/0 → **Firewall Endpoint** (same AZ)
+1. EC2 response returns through the spoke NLB → Transit Gateway → Edge NLB
+2. Edge NLB sends the response to the client; Public Subnet routes 0.0.0.0/0 → **Firewall Endpoint** (same AZ)
 3. Network Firewall inspects the return traffic (matching the stateful flow from the inbound path)
 4. Firewall Subnet routes 0.0.0.0/0 → **Internet Gateway**; response exits to the internet
 
-> **Symmetric routing**: Inbound traffic goes IGW → Firewall → ALB, and return traffic goes ALB → Firewall → IGW. The firewall sees both directions of every flow.
+> **Symmetric routing**: Inbound traffic goes IGW → Firewall → NLB, and return traffic goes NLB → Firewall → IGW. The firewall sees both directions of every flow.
 
 ### Spoke Egress Path (e.g., yum install, SSM)
 1. Spoke EC2 initiates outbound connection → Spoke route table sends 0.0.0.0/0 → TGW
@@ -80,28 +80,28 @@ Two example workload VPCs demonstrating end-to-end ingress traffic flow:
 ## Deployment Instructions
 
 1. Ensure you have appropriate AWS permissions
-2. (Optional) Provision or import an ACM certificate for the ALB HTTPS listener - if not provided, the template will skip the HTTPS listener
+2. (Optional) Provision or import an ACM certificate for the NLB TLS listener - if not provided, the template will skip the TLS listener
 3. Deploy the CloudFormation template:
    ```bash
    aws cloudformation create-stack \
      --stack-name anfw-centralized-ingress-2az \
      --template-body file://anfw-centralized-ingress-2az-template.yaml \
      --capabilities CAPABILITY_IAM \
-     --parameters ParameterKey=ALBCertificateArn,ParameterValue=arn:aws:acm:REGION:ACCOUNT:certificate/CERTIFICATE-ID
+     --parameters ParameterKey=NLBCertificateArn,ParameterValue=arn:aws:acm:REGION:ACCOUNT:certificate/CERTIFICATE-ID
    ```
-   Omit the `ALBCertificateArn` parameter to deploy without the HTTPS listener (HTTP only).
+   Omit the `NLBCertificateArn` parameter to deploy without the TLS listener (HTTP only).
 4. Wait for the stack to reach `CREATE_COMPLETE` status
-5. Allow approximately 8-10 minutes after stack completion for EC2 instances to finish UserData execution (installing httpd via the NAT Gateway egress path) and for the Edge ALB target group health checks to pass. You can monitor target health with:
+5. Allow approximately 8-10 minutes after stack completion for EC2 instances to finish UserData execution (installing httpd via the NAT Gateway egress path) and for the Edge NLB target group health checks to pass. You can monitor target health with:
    ```bash
    aws elbv2 describe-target-health \
      --target-group-arn $(aws elbv2 describe-target-groups --names e-http-anfw-centralized-ingress-2az --query 'TargetGroups[0].TargetGroupArn' --output text)
    ```
-6. Access the Edge ALB DNS name from the stack outputs to test ingress traffic flow
+6. Access the Edge NLB DNS name from the stack outputs to test ingress traffic flow
 
 ## Important Notes
 
-- **(Optional) TLS Termination** - TLS is terminated at the Edge ALB using an ACM certificate. All downstream traffic to spoke NLBs and EC2 instances is plaintext HTTP on port 80.
-- **Spoke NLB Static IPs** - Spoke NLBs use static private IPs via SubnetMappings, pre-registered as ALB targets. No manual target registration is needed.
+- **(Optional) TLS Termination** - TLS is terminated at the Edge NLB using an ACM certificate. All downstream traffic to spoke NLBs and EC2 instances is plaintext HTTP on port 80.
+- **Spoke NLB Static IPs** - Spoke NLBs use static private IPs via SubnetMappings, pre-registered as Edge NLB targets. No manual target registration is needed.
 - **Symmetric Inspection** - The Public Subnet routes 0.0.0.0/0 to the Firewall Endpoint (not the IGW) to ensure return traffic passes through the firewall, avoiding asymmetric routing.
 
 ## Enabling the Allow-List Rule Group
@@ -128,11 +128,11 @@ The allow-list rules will:
 This deployment incurs higher costs compared to single AZ due to:
 - Additional NAT Gateway in second AZ
 - Additional firewall endpoint in second AZ
-- ALB cross-AZ load balancing
+- NLB cross-AZ load balancing
 
 ## Testing Alternative
 
-For development and testing environments, consider the [Single AZ Deployment](../centralized_ingress_single_az/) which provides the same functionality at lower cost using an NLB instead of an ALB.
+For development and testing environments, consider the [Single AZ Deployment](../centralized_ingress_single_az/) which provides the same functionality at lower cost at lower cost.
 
 ## Additional Resources
 

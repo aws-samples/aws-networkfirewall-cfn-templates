@@ -1,141 +1,134 @@
-# Centralized Ingress Inspection - Two AZ Deployment
+# Centralized Ingress + Egress/East-West Inspection - Two AZ
 
 **Template File:** [anfw-centralized-ingress-2az-template.yaml](anfw-centralized-ingress-2az-template.yaml)
 
-This template deploys AWS Network Firewall in a centralized ingress inspection architecture across two Availability Zones. All inbound internet traffic is routed through the Network Firewall in an Edge VPC before reaching application workloads in spoke VPCs via Transit Gateway. This configuration provides high availability and is recommended for production environments.
+This template deploys a dual-firewall architecture for centralized network inspection across two Availability Zones: a VPC-attached ingress firewall for inbound non-web traffic (SSH/SFTP), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. This configuration provides high availability and is recommended for production environments.
+
+## Why Network Firewall for Ingress?
+
+AWS WAF is the recommended solution for ingress filtering of HTTP/HTTPS traffic to supported resources (ALBs, CloudFront, API Gateway). Network Firewall is the best fit for centralized ingress inspection of **non-web protocols** and resources that WAF does not support, such as:
+- SSH/SFTP servers behind NLBs
+- Custom TCP/UDP protocols (IoT, gaming, SIP/VoIP)
+- DNS resolvers
+- Any non-HTTP service exposed to the internet
 
 ## Architecture Overview
 
-This multi-AZ deployment creates a centralized ingress inspection model using an Edge VPC with an internet-facing Network Load Balancer, AWS Network Firewall endpoints in each AZ, and AWS Transit Gateway. Inbound traffic from the internet enters through the Edge VPC Internet Gateway, is steered through the Network Firewall for inspection via an IGW Ingress Route Table, and then reaches the Edge NLB. The NLB terminates TLS (optional) and forwards plaintext TCP to spoke VPC NLBs via Transit Gateway, which distribute traffic to EC2 instances running httpd.
+### Components
+- **Ingress VPC** (100.64.0.0/16) - IGW, VPC-attached Network Firewall (endpoint per AZ), internet-facing NLB
+- **Egress VPC** (10.100.0.0/16) - NAT Gateway per AZ, IGW for outbound internet
+- **Egress/East-West Firewall** - TGW-native attached (endpoint per AZ), inspects egress and spoke-to-spoke traffic
+- **Spoke A** (10.1.0.0/16) - SSH bastion in AZ1 (10.1.1.10)
+- **Spoke B** (10.2.0.0/16) - SFTP server in AZ2 (10.2.1.10)
+- **Transit Gateway** - Connects all VPCs with four route tables
 
-## Resources Created
+### Traffic Flows
 
-### Edge VPC (100.64.0.0/16)
-Centralized VPC for ingress traffic inspection across two AZs:
-- **Firewall Subnets** (100.64.0.16/28, 100.64.0.32/28) - Contains AWS Network Firewall endpoints in each AZ
-- **Public Subnets** (100.64.1.0/24, 100.64.2.0/24) - Contains the internet-facing NLB and NAT Gateways
-- **TGW Subnets** (100.64.0.0/28, 100.64.0.48/28) - Attachment points for Transit Gateway
-- **Internet Gateway** - Entry point for inbound internet traffic
-- **NAT Gateways** (one per AZ) - Provide outbound internet access for spoke EC2 instances (package installation, SSM)
+**Ingress (SSH on port 22 → Spoke A):**
+Internet → IGW → Ingress NFW → NLB (port 22) → TGW → Spoke A EC2
 
-### AWS Network Firewall
-- Firewall endpoints deployed in both AZs of the Edge VPC
-- Firewall policy with STRICT_ORDER rule ordering and REJECT stream exception
-- Log-only Suricata rule group for ingress traffic (alerts on HTTP, HTTPS, SSH, ICMP)
-- Comprehensive allow-list rule group (defined but not referenced in policy by default)
-- CloudWatch logging for both ALERT and FLOW log types (30-day retention)
+**Ingress (SFTP on port 2222 → Spoke B):**
+Internet → IGW → Ingress NFW → NLB (port 2222) → TGW → Spoke B EC2
 
-### Spoke VPCs
-Two example workload VPCs demonstrating end-to-end ingress traffic flow:
-- **Spoke A** (10.1.0.0/16) - Workload subnets, TGW subnets, EC2 instances with httpd (port 80) in each AZ
-- **Spoke B** (10.2.0.0/16) - Workload subnets, TGW subnets, EC2 instances with httpd (port 80) in each AZ
-- Internal NLBs with static private IPs fronting EC2 instances in each spoke (TCP port 80 only)
-- SSM VPC endpoints for instance management
-- Security groups allowing ICMP and HTTP from required CIDRs
+**Egress (sees true source IP):**
+EC2 → TGW → Egress/EW NFW (sees 10.x.x.x) → TGW → Egress VPC → NAT GW → IGW → Internet
 
-### Edge NLB
-- Internet-facing Network Load Balancer in the Edge VPC Public Subnets
-- (Optional) TLS listener on port 443 that terminates TLS using an ACM certificate and forwards to port 80 (conditional on `NLBCertificateArn` parameter)
-- TCP listener on port 80
-- Single IP-type target group (port 80, TCP) with spoke NLB static IPs pre-registered
-- Security group allowing inbound TCP 80 and 443 from 0.0.0.0/0
-
-### Transit Gateway
-- Central routing hub connecting Edge VPC and spoke VPCs
-- Spoke route table with default route to Edge VPC attachment
-- Inspection route table with propagated spoke routes
-- Appliance Mode enabled on the Edge VPC attachment for flow symmetry
-
-## Traffic Flow
-
-### Ingress Path (Internet → Application)
-1. Client request arrives at the Internet Gateway
-2. IGW Ingress Route Table steers traffic to the Network Firewall endpoint in the same AZ (Public Subnet CIDR → Firewall Endpoint)
-3. Network Firewall inspects the inbound traffic using Suricata stateful rules
-4. Inspected traffic reaches the Edge NLB in the Public Subnet via VPC local route
-5. NLB terminates TLS (if HTTPS) and forwards HTTP to spoke NLB IPs via Transit Gateway (Public Subnet routes 10.0.0.0/8 → TGW)
-6. Spoke NLB distributes traffic to EC2 instances running httpd on port 80
-
-### Ingress Return Path (Application → Internet) — Symmetric
-1. EC2 response returns through the spoke NLB → Transit Gateway → Edge NLB
-2. Edge NLB sends the response to the client; Public Subnet routes 0.0.0.0/0 → **Firewall Endpoint** (same AZ)
-3. Network Firewall inspects the return traffic (matching the stateful flow from the inbound path)
-4. Firewall Subnet routes 0.0.0.0/0 → **Internet Gateway**; response exits to the internet
-
-> **Symmetric routing**: Inbound traffic goes IGW → Firewall → NLB, and return traffic goes NLB → Firewall → IGW. The firewall sees both directions of every flow.
-
-### Spoke Egress Path (e.g., yum install, SSM)
-1. Spoke EC2 initiates outbound connection → Spoke route table sends 0.0.0.0/0 → TGW
-2. TGW Subnet route table sends 0.0.0.0/0 → **NAT Gateway** (same AZ, source IP translated)
-3. NAT Gateway outbound follows Public Subnet route: 0.0.0.0/0 → **Firewall Endpoint** (same AZ)
-4. Firewall inspects the NAT'd egress traffic → Firewall Subnet routes 0.0.0.0/0 → **IGW**
-5. Return traffic from the internet is steered back through the firewall via the IGW Ingress Route Table
+**East-West (spoke-to-spoke, inspected):**
+Spoke A → TGW → Egress/EW NFW → TGW → Spoke B
 
 ## High Availability Features
 
-- **Multi-AZ Deployment** - Resources distributed across two Availability Zones
-- **AZ-Specific Routing** - Each Public Subnet routes to its same-AZ firewall endpoint; each TGW Subnet routes to its same-AZ NAT Gateway
-- **Per-AZ Firewall Endpoints** - Network Firewall endpoints in each AZ ensure traffic stays within the same AZ
+- **Multi-AZ firewall endpoints** - Both ingress and egress firewalls have endpoints in each AZ
+- **Per-AZ NAT Gateways** - Egress traffic stays within the same AZ
+- **Per-AZ routing** - Each public subnet routes to its same-AZ firewall endpoint
+- **Multi-AZ NLB** - Internet-facing NLB spans both AZs
+- **Multi-AZ TGW attachments** - All VPCs attach to TGW in both AZs
 
-## Deployment Instructions
+## Parameters
 
-1. Ensure you have appropriate AWS permissions
-2. (Optional) Provision or import an ACM certificate for the NLB TLS listener - if not provided, the template will skip the TLS listener
-3. Deploy the CloudFormation template:
-   ```bash
-   aws cloudformation create-stack \
-     --stack-name anfw-centralized-ingress-2az \
-     --template-body file://anfw-centralized-ingress-2az-template.yaml \
-     --capabilities CAPABILITY_IAM \
-     --parameters ParameterKey=NLBCertificateArn,ParameterValue=arn:aws:acm:REGION:ACCOUNT:certificate/CERTIFICATE-ID
-   ```
-   Omit the `NLBCertificateArn` parameter to deploy without the TLS listener (HTTP only).
-4. Wait for the stack to reach `CREATE_COMPLETE` status
-5. Allow approximately 8-10 minutes after stack completion for EC2 instances to finish UserData execution (installing httpd via the NAT Gateway egress path) and for the Edge NLB target group health checks to pass. You can monitor target health with:
-   ```bash
-   aws elbv2 describe-target-health \
-     --target-group-arn $(aws elbv2 describe-target-groups --names e-http-anfw-centralized-ingress-2az --query 'TargetGroups[0].TargetGroupArn' --output text)
-   ```
-6. Access the Edge NLB DNS name from the stack outputs to test ingress traffic flow
+| Parameter | Description | Required |
+|-----------|-------------|----------|
+| AvailabilityZone1Selection | First Availability Zone | Yes (default: us-east-1a) |
+| AvailabilityZone2Selection | Second Availability Zone | Yes (default: us-east-1b) |
+| AllowedSourceIP | Your public IP in CIDR /32 format (e.g., 203.0.113.25/32) | Yes |
+| LatestAmiId | SSM parameter for Amazon Linux 2 AMI | No (auto-resolved) |
 
-## Important Notes
+## Deployment
 
-- **(Optional) TLS Termination** - TLS is terminated at the Edge NLB using an ACM certificate. All downstream traffic to spoke NLBs and EC2 instances is plaintext HTTP on port 80.
-- **Spoke NLB Static IPs** - Spoke NLBs use static private IPs via SubnetMappings, pre-registered as Edge NLB targets. No manual target registration is needed.
-- **Symmetric Inspection** - The Public Subnet routes 0.0.0.0/0 to the Firewall Endpoint (not the IGW) to ensure return traffic passes through the firewall, avoiding asymmetric routing.
+```bash
+# Get your public IP
+MY_IP=$(curl -s https://checkip.amazonaws.com)
 
-## Enabling the Allow-List Rule Group
+# Deploy
+aws cloudformation deploy \
+  --stack-name anfw-centralized-ingress-2az \
+  --template-file anfw-centralized-ingress-2az-template.yaml \
+  --parameter-overrides \
+    AvailabilityZone1Selection=us-east-1a \
+    AvailabilityZone2Selection=us-east-1b \
+    AllowedSourceIP="${MY_IP}/32" \
+  --capabilities CAPABILITY_NAMED_IAM
+```
 
-By default, only the log-only rule group is active — it alerts on inbound traffic patterns without blocking anything. The template also creates a comprehensive allow-list rule group (`IngressAllowListRuleGroup`) that is defined but not referenced in the firewall policy.
+## Testing
 
-When you're ready to move beyond log-only mode and enforce ingress filtering:
+After deployment (~10 minutes for NLB health checks to converge):
 
-1. Open the [Network Firewall console](https://console.aws.amazon.com/vpc/home#NetworkFirewallPolicies) and select the `ingress-firewall-policy-<stack-name>` policy
-2. Under **Stateful rule group references**, click **Add rule group** and select `ingress-allow-list-<stack-name>`
-3. Set its priority to a value higher than the log-only group (e.g., 100 if log-only is at 50) so alerts fire before enforcement
-4. Save the policy — the firewall endpoints will sync within a few minutes
+```bash
+# Get the NLB DNS and password
+NLB=$(aws cloudformation describe-stacks --stack-name anfw-centralized-ingress-2az \
+  --query "Stacks[0].Outputs[?OutputKey=='IngressNLBDNSName'].OutputValue" --output text)
+PASS=$(aws secretsmanager get-secret-value \
+  --secret-id /anfw-centralized-ingress-2az/demo-user-password \
+  --query SecretString --output text)
 
-The allow-list rules will:
-- **Pass** inbound HTTP (port 80) and HTTPS (port 443) to HOME_NET
-- **Pass** established return traffic from HOME_NET
-- **Alert** on traffic from RU/CN geolocations
-- **Drop** all other inbound TCP, UDP, ICMP, and IP traffic
+# Test SSH (port 22 → Spoke A)
+ssh demouser@$NLB    # password: $PASS
 
-> **Note:** The log-only group fires first (lower priority number), so you retain full alert visibility even after enabling enforcement. To revert to log-only mode, remove the allow-list reference from the policy. If you added the allow-list via the console (outside CloudFormation), remember to remove it before deleting the stack to avoid delete failures.
+# Test SFTP (port 2222 → Spoke B)
+sftp -P 2222 sftpuser@$NLB    # password: $PASS
+
+# Verify egress path (from inside SSH session)
+curl https://checkip.amazonaws.com    # Should show Egress NAT GW EIP
+```
+
+## Key Design Decisions
+
+1. **Dual firewalls** - Ingress (VPC-attached) uses IGW routing trick for inbound inspection. Egress (TGW-native) sees true source IPs before NAT.
+2. **Non-web protocols** - SSH/SFTP demonstrate NFW's value for traffic WAF cannot inspect.
+3. **Static EC2 IPs** - No spoke NLBs needed; central NLB targets EC2 IPs directly via TGW.
+4. **IP-restricted access** - NLB security group locked to deployer's IP (AllowedSourceIP parameter).
+5. **Password auth via Secrets Manager** - Random 24-char password, no key pair required.
+6. **East-west inspection** - All spoke-to-spoke traffic routed through the egress firewall.
+
+## TGW Route Tables
+
+| Route Table | Associated With | Routes |
+|-------------|----------------|--------|
+| Spoke RT | Spoke A & B attachments | 0.0.0.0/0 → Egress FW, 100.64.0.0/16 → Ingress VPC |
+| Ingress VPC RT | Ingress VPC attachment | 10.1.0.0/16, 10.2.0.0/16 (propagated from spokes) |
+| Egress Inspection RT | Egress FW attachment | 0.0.0.0/0 → Egress VPC, spoke routes (propagated) |
+| Egress VPC RT | Egress VPC attachment | 0.0.0.0/0 → Egress FW (symmetric return) |
+
+## Firewall Rules
+
+Both firewalls deploy with **log-only rules** by default (no blocking). This allows you to observe traffic patterns before enabling enforcement.
+
+**Ingress firewall alerts on:** HTTP, TLS, SSH, ICMP, and generic IP inbound traffic.
+
+**Egress/east-west firewall alerts on:** Geo-destined traffic (RU, CN), high-risk TLDs (.ru, .xyz, .info, .onion), and protocol-specific alerts (HTTP, TLS, SSH, ICMP).
 
 ## Cost Considerations
 
 This deployment incurs higher costs compared to single AZ due to:
 - Additional NAT Gateway in second AZ
-- Additional firewall endpoint in second AZ
+- Additional firewall endpoints (ingress and egress) in second AZ
 - NLB cross-AZ load balancing
 
-## Testing Alternative
-
-For development and testing environments, consider the [Single AZ Deployment](../centralized_ingress_single_az/) which provides the same functionality at lower cost at lower cost.
+For development and testing, consider the [Single AZ Deployment](../centralized_ingress_single_az/) which provides the same functionality at lower cost.
 
 ## Additional Resources
 
 - [AWS Network Firewall Documentation](https://docs.aws.amazon.com/network-firewall/)
-- [AWS Transit Gateway Documentation](https://docs.aws.amazon.com/transit-gateway/)
-- [Deployment models for AWS Network Firewall Blog](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)
+- [AWS Network Firewall Best Practices](https://aws.github.io/aws-security-services-best-practices/guides/network-firewall/)
+- [Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/)

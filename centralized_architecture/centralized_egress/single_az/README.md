@@ -56,7 +56,7 @@ Two example workload VPCs that demonstrate traffic routing through the inspectio
 
 ## Production Considerations
 
-For environments requiring high availability, consider the [Two AZ Deployment](../two_az_deployment/) which provides:
+For environments requiring high availability, consider the [Two AZ Deployment](../two_az/) which provides:
 - High availability across multiple Availability Zones
 - Better fault tolerance
 - Resilient architecture

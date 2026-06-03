@@ -1,6 +1,6 @@
 # Centralized Ingress + Egress/East-West Inspection - Single AZ
 
-**Template File:** [anfw-centralized-ingress-1az-template.yaml](anfw-centralized-ingress-1az-template.yaml)
+**Template File:** [anfw-centralized-ingress-and-egress-1az-template.yaml](anfw-centralized-ingress-and-egress-1az-template.yaml)
 
 This template deploys a dual-firewall architecture for centralized network inspection: a VPC-attached ingress firewall for inbound non-web traffic (SSH/SFTP), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. Designed for testing, development, and proof-of-concept environments.
 
@@ -8,7 +8,7 @@ This template deploys a dual-firewall architecture for centralized network inspe
 
 AWS WAF is the recommended solution for ingress filtering of HTTP/HTTPS traffic to supported resources (ALBs, CloudFront, API Gateway). Network Firewall is the best fit for centralized ingress inspection of **non-web protocols** and resources that WAF does not support, such as:
 - SSH/SFTP servers behind NLBs
-- Custom TCP/UDP protocols (IoT, gaming, SIP/VoIP)
+- Custom TCP/UDP protocols (IoT, gaming, SIP/VoIP, streaming media)
 - DNS resolvers
 - Any non-HTTP service exposed to the internet
 
@@ -53,7 +53,7 @@ MY_IP=$(curl -s https://checkip.amazonaws.com)
 # Deploy
 aws cloudformation deploy \
   --stack-name anfw-centralized-ingress-1az \
-  --template-file anfw-centralized-ingress-1az-template.yaml \
+  --template-file anfw-centralized-ingress-and-egress-1az-template.yaml \
   --parameter-overrides \
     AvailabilityZoneSelection=us-east-1a \
     AllowedSourceIP="${MY_IP}/32" \
@@ -85,7 +85,7 @@ curl https://checkip.amazonaws.com    # Should show Egress NAT GW EIP
 ## Key Design Decisions
 
 1. **Dual firewalls** - Ingress (VPC-attached) uses IGW routing trick for inbound inspection. Egress (TGW-native) sees true source IPs before NAT.
-2. **Non-web protocols** - SSH/SFTP demonstrate NFW's value for traffic WAF cannot inspect.
+2. **Non-web protocols** - SSH/SFTP sample workloads to demonstrate NFW's value for traffic WAF cannot inspect.
 3. **Static EC2 IPs** - No spoke NLBs needed; central NLB targets EC2 IPs directly via TGW.
 4. **IP-restricted access** - NLB security group locked to deployer's IP (AllowedSourceIP parameter).
 5. **Password auth via Secrets Manager** - Random 24-char password, no key pair required.
@@ -110,7 +110,7 @@ Both firewalls deploy with **log-only rules** by default (no blocking). This all
 
 ## Production Considerations
 
-- **Single AZ** - No high availability. Use the [Two AZ Deployment](../centralized_ingress_two_az/) for production.
+- **Single AZ** - No high availability. Use the [Two AZ Deployment](../two_az/) for production.
 - **Log-only rules** - Enable enforcement rule groups when ready to block traffic.
 - **Scaling** - Add more spoke VPCs by creating TGW attachments and associating with the Spoke RT.
 

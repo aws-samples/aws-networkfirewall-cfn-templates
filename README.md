@@ -23,27 +23,29 @@ Attaches AWS Network Firewall directly to [Transit Gateway as a native attachmen
 
 ![TGW-Attached Firewall](images/tgw-native-attach-full.png)
 
-#### [Inspection VPC Model](centralized_architecture/)
+#### [Inspection VPC Model — Egress/East-West](centralized_architecture/centralized_egress/)
 
-Routes traffic through a dedicated inspection VPC containing the firewall endpoints.
-
-| Template | Use Case |
-|----------|----------|
-| [Single AZ](centralized_architecture/single_az_deployment/) | Single availability zone |
-| [Two AZ](centralized_architecture/two_az_deployment/) | High availability across two AZs |
-
-#### [Centralized Ingress Inspection](centralized_architecture/)
-
-Routes inbound internet traffic through a dedicated Edge VPC containing Network Firewall endpoints for inspection before forwarding to spoke VPCs via Transit Gateway. TLS is terminated at the Edge load balancer.
+Routes egress and east-west traffic through a dedicated inspection VPC containing the firewall endpoints.
 
 | Template | Use Case |
 |----------|----------|
-| [Single AZ Ingress](centralized_architecture/centralized_ingress_single_az/) | Single availability zone (NLB with TLS termination) |
-| [| [Two AZ Ingress](centralized_architecture/centralized_ingress_two_az/) | High availability across two AZs (NLB with TLS termination) |
+| [Single AZ](centralized_architecture/centralized_egress/single_az/) | Single availability zone |
+| [Two AZ](centralized_architecture/centralized_egress/two_az/) | High availability across two AZs |
 
-<!-- TODO: Add architecture diagram for centralized ingress inspection (current image shows egress/east-west only) -->
 ![Centralized Architecture](images/anfw-centralized-model-1az.png)
 
+#### [Inspection VPC Model — Ingress + Egress/East-West](centralized_architecture/centralized_ingress_and_egress/)
+
+Dual-firewall architecture for non-web protocol inspection. A VPC-attached Ingress Firewall inspects inbound SSH/SFTP traffic, while a TGW-native Egress/East-West Firewall inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs before NAT.
+
+| Template | Use Case |
+|----------|----------|
+| [Single AZ](centralized_architecture/centralized_ingress_and_egress/single_az/) | Single availability zone for testing and development |
+| [Two AZ](centralized_architecture/centralized_ingress_and_egress/two_az/) | High availability across two AZs for production |
+
+<!-- TODO: Add architecture diagram for centralized ingress + egress/east-west inspection -->
+
+--- 
 ### Distributed Architecture
 
 Deploys AWS Network Firewall into each VPC individually. No Transit Gateway required—each VPC is protected independently.
@@ -102,5 +104,6 @@ This sample code is made available under the MIT-0 license. See the [LICENSE](LI
 | Pratik R. Mankad, Sr. Solutions Architect | pmankad@amazon.com |
 | Shakeel Ahmad, Sr. Solutions Architect | shkahma@amazon.com |
 | Daniel Yu, Sr. Technical Account Manager | dyuamzn@amazon.com |
+| Daniel Souza, Sr. Solutions Architect | dnlsouza@amazon.com |
 
 

@@ -72,7 +72,7 @@ This deployment incurs higher costs compared to single AZ due to:
 
 ## Testing Alternative
 
-For development and testing environments, consider the [Single AZ Deployment](../single_az_deployment/) which provides the same functionality at lower cost.
+For development and testing environments, consider the [Single AZ Deployment](../single_az/) which provides the same functionality at lower cost.
 
 ## Additional Resources
 

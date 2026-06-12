@@ -40,7 +40,7 @@ Parameters:
   LatestAmiId:
     Description: Latest EC2 AMI from Systems Manager Parameter Store
     Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
-    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
 
 Resources:
 # ============================================================================
@@ -213,7 +213,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           # Wait for egress connectivity
-          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
+          for i in $(seq 1 30); do curl -s --max-time 5 https://al2023-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
           # Get password from Secrets Manager
           PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${DemoUserPassword} --region ${AWS::Region} --query SecretString --output text)
           # Create demo user with password auth
@@ -385,7 +385,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           # Wait for egress connectivity
-          for i in $(seq 1 30); do curl -s --max-time 5 https://amazonlinux-2-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
+          for i in $(seq 1 30); do curl -s --max-time 5 https://al2023-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
           # Get password from Secrets Manager
           PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${DemoUserPassword} --region ${AWS::Region} --query SecretString --output text)
           # Create SFTP-only user with password auth

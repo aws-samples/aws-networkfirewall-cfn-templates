@@ -12,6 +12,8 @@ AWS WAF is the recommended solution for ingress filtering of HTTP/HTTPS traffic 
 - DNS resolvers
 - Any non-HTTP service exposed to the internet
 
+![Base Architecture](../../../images/anfw-centralized-ingress-egress-east-west-1az.png)
+
 ## Architecture Overview
 
 ### Components
@@ -42,7 +44,7 @@ Spoke A → TGW → Egress/EW NFW → TGW → Spoke B
 |-----------|-------------|----------|
 | AvailabilityZoneSelection | Availability Zone for all resources | Yes (default: us-east-1a) |
 | AllowedSourceIP | Your public IP in CIDR /32 format (e.g., 203.0.113.25/32) | Yes |
-| LatestAmiId | SSM parameter for Amazon Linux 2 AMI | No (auto-resolved) |
+| LatestAmiId | SSM parameter for Amazon Linux 2023 AMI | No (auto-resolved) |
 
 ## Deployment
 

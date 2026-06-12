@@ -51,7 +51,7 @@ Spoke A → TGW → Egress/EW NFW → TGW → Spoke B
 | AvailabilityZone1Selection | First Availability Zone | Yes (default: us-east-1a) |
 | AvailabilityZone2Selection | Second Availability Zone | Yes (default: us-east-1b) |
 | AllowedSourceIP | Your public IP in CIDR /32 format (e.g., 203.0.113.25/32) | Yes |
-| LatestAmiId | SSM parameter for Amazon Linux 2 AMI | No (auto-resolved) |
+| LatestAmiId | SSM parameter for Amazon Linux 2023 AMI | No (auto-resolved) |
 
 ## Deployment
 

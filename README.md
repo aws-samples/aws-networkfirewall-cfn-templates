@@ -43,7 +43,7 @@ Dual-firewall architecture for non-web protocol inspection. A VPC-attached Ingre
 | [Single AZ](centralized_architecture/centralized_ingress_and_egress/single_az/) | Single availability zone for testing and development |
 | [Two AZ](centralized_architecture/centralized_ingress_and_egress/two_az/) | High availability across two AZs for production |
 
-<!-- TODO: Add architecture diagram for centralized ingress + egress/east-west inspection -->
+![Centralized Ingress + Egress/East-West Architecture](images/anfw-centralized-ingress-egress-east-west-1az.png)
 
 --- 
 ### Distributed Architecture

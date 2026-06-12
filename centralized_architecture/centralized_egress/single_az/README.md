@@ -4,7 +4,7 @@
 
 This template deploys AWS Network Firewall in a centralized architecture pattern within a single Availability Zone. This configuration is designed for testing, development, and proof-of-concept environments.
 
-![Base Architecture](../../images/anfw-centralized-model-1az.png)
+![Base Architecture](../../../images/anfw-centralized-model-1az.png)
 
 ## Architecture Overview
 

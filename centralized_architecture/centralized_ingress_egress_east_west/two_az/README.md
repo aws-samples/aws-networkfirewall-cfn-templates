@@ -1,8 +1,8 @@
 # Centralized Ingress + Egress/East-West Inspection - Two AZ
 
-**Template File:** [anfw-centralized-ingress-and-egress-2az-template.yaml](anfw-centralized-ingress-and-egress-2az-template.yaml)
+**Template File:** [anfw-centralized-ingress-egress-east-west-2az-template.yaml](anfw-centralized-ingress-egress-east-west-2az-template.yaml)
 
-This template deploys a dual-firewall architecture for centralized network inspection across two Availability Zones: a VPC-attached ingress firewall for inbound non-web traffic (SSH/SFTP), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. This configuration provides high availability and is recommended for production environments.
+This template deploys a dual-firewall architecture for centralized network inspection across two Availability Zones: a VPC-attached ingress firewall that inspects all inbound traffic to the centralized NLB (showcasing SSH/SFTP filtering as a non-web protocol use case), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. This configuration provides high availability and is recommended for production environments.
 
 ## Why Network Firewall for Ingress?
 
@@ -62,7 +62,7 @@ MY_IP=$(curl -s https://checkip.amazonaws.com)
 # Deploy
 aws cloudformation deploy \
   --stack-name anfw-centralized-ingress-2az \
-  --template-file anfw-centralized-ingress-and-egress-2az-template.yaml \
+  --template-file anfw-centralized-ingress-egress-east-west-2az-template.yaml \
   --parameter-overrides \
     AvailabilityZone1Selection=us-east-1a \
     AvailabilityZone2Selection=us-east-1b \

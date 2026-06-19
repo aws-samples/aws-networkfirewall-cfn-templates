@@ -1,56 +1,58 @@
-# Centralized Architecture
+# Centralized Architecture - Inspection VPC Model
 
 The centralized deployment model uses [AWS Transit Gateway](https://aws.amazon.com/transit-gateway/) as a network hub to simplify connectivity between VPCs and on-premises networks. All templates in this folder use Transit Gateway to route traffic through centralized inspection points.
+
+> **Looking for TGW-native attached firewall?** See the [Transit Gateway-Attached Firewall](../transit-gateway-attached-firewall/) templates for the recommended egress/east-west deployment model using the native TGW firewall attachment (no inspection VPC required).
 
 ## Available Templates
 
 ```
 centralized_architecture/
-├── centralized_egress/              # Egress/east-west inspection only
+├── centralized_egress_east_west/                # Egress + east-west inspection (inspection VPC model)
 │   ├── single_az/
 │   └── two_az/
-└── centralized_ingress_and_egress/  # Ingress + egress/east-west (dual firewall)
+└── centralized_ingress_egress_east_west/        # Ingress + egress + east-west (dual firewall)
     ├── single_az/
     └── two_az/
 ```
 
 ---
 
-## [Centralized Egress](centralized_egress/)
+## [Centralized Egress + East-West](centralized_egress_east_west/)
 
-Two CloudFormation templates that deploy the same centralized architecture pattern - centralized inspection for both East-West (VPC to VPC) and egress (internet-bound) traffic through a dedicated inspection VPC:
+Centralized inspection for both east-west (VPC-to-VPC) and egress (internet-bound) traffic through a dedicated inspection VPC containing the firewall endpoints.
 
-### [Single AZ Deployment](centralized_egress/single_az/)
-- **Template:** `anfw-centralized-1az-template.yaml`
+### [Single AZ Deployment](centralized_egress_east_west/single_az/)
+- **Template:** `anfw-centralized-egress-east-west-1az-template.yaml`
 - **Use Case:** Testing and proof-of-concept environments
 - **Resources:** All components deployed in a single Availability Zone
 
-### [Two AZ Deployment](centralized_egress/two_az/)
-- **Template:** `anfw-centralized-2az-template.yaml`
+### [Two AZ Deployment](centralized_egress_east_west/two_az/)
+- **Template:** `anfw-centralized-egress-east-west-2az-template.yaml`
 - **Use Case:** Production environments requiring high availability
 - **Resources:** Components distributed across two Availability Zones
 
 ### Architecture Components
-**Inspection VPC** - Centralized VPC for both East-West and Egress traffic inspection
+**Inspection VPC** - Centralized VPC for both east-west and egress traffic inspection
 - Transit Gateway subnet
 - Firewall subnet (contains AWS Network Firewall endpoints)
-- Public subnet (contains NAT Gateway(s) for Internet access)
+- Public subnet (contains NAT Gateway(s) for internet access)
 
 **Spoke VPCs** - Example workload VPCs that route traffic through the inspection VPC
 
 ---
 
-## [Centralized Ingress + Egress/East-West](centralized_ingress_and_egress/)
+## [Centralized Ingress + Egress + East-West](centralized_ingress_egress_east_west/)
 
-Dual-firewall architecture for centralized network inspection: a VPC-attached ingress firewall for inbound non-web traffic (SSH/SFTP), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. 
+Dual-firewall architecture for full centralized network inspection: a VPC-attached ingress firewall inspects all inbound traffic to the centralized NLB (showcasing SSH/SFTP filtering as a non-web protocol use case), and a TGW-native egress/east-west firewall inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs before NAT.
 
-### [Single AZ Deployment](centralized_ingress_and_egress/single_az/)
-- **Template:** `anfw-centralized-ingress-and-egress-1az-template.yaml`
+### [Single AZ Deployment](centralized_ingress_egress_east_west/single_az/)
+- **Template:** `anfw-centralized-ingress-egress-east-west-1az-template.yaml`
 - **Use Case:** Testing, development, and proof-of-concept environments
 - **Resources:** All components deployed in a single Availability Zone
 
-### [Two AZ Deployment](centralized_ingress_and_egress/two_az/)
-- **Template:** `anfw-centralized-ingress-and-egress-2az-template.yaml`
+### [Two AZ Deployment](centralized_ingress_egress_east_west/two_az/)
+- **Template:** `anfw-centralized-ingress-egress-east-west-2az-template.yaml`
 - **Use Case:** Production environments requiring high availability
 - **Resources:** Components distributed across two Availability Zones
 
@@ -77,4 +79,3 @@ Dual-firewall architecture for centralized network inspection: a VPC-attached in
 ## Additional Resources
 
 For detailed information about AWS Network Firewall deployment models, refer to the [AWS Blog: Deployment models for AWS Network Firewall](https://aws.amazon.com/blogs/networking-and-content-delivery/deployment-models-for-aws-network-firewall/).
-

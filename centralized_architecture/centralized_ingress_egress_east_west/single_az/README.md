@@ -1,8 +1,8 @@
 # Centralized Ingress + Egress/East-West Inspection - Single AZ
 
-**Template File:** [anfw-centralized-ingress-and-egress-1az-template.yaml](anfw-centralized-ingress-and-egress-1az-template.yaml)
+**Template File:** [anfw-centralized-ingress-egress-east-west-1az-template.yaml](anfw-centralized-ingress-egress-east-west-1az-template.yaml)
 
-This template deploys a dual-firewall architecture for centralized network inspection: a VPC-attached ingress firewall for inbound non-web traffic (SSH/SFTP), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. Designed for testing, development, and proof-of-concept environments.
+This template deploys a dual-firewall architecture for centralized network inspection: a VPC-attached ingress firewall that inspects all inbound traffic to the centralized NLB (showcasing SSH/SFTP filtering as a non-web protocol use case), and a TGW-native egress/east-west firewall that inspects all outbound and spoke-to-spoke traffic with visibility into true source IPs. Designed for testing, development, and proof-of-concept environments.
 
 ## Why Network Firewall for Ingress?
 
@@ -55,7 +55,7 @@ MY_IP=$(curl -s https://checkip.amazonaws.com)
 # Deploy
 aws cloudformation deploy \
   --stack-name anfw-centralized-ingress-1az \
-  --template-file anfw-centralized-ingress-and-egress-1az-template.yaml \
+  --template-file anfw-centralized-ingress-egress-east-west-1az-template.yaml \
   --parameter-overrides \
     AvailabilityZoneSelection=us-east-1a \
     AllowedSourceIP="${MY_IP}/32" \

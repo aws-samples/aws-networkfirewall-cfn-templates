@@ -12,6 +12,9 @@ AWS WAF is the recommended solution for ingress filtering of HTTP/HTTPS traffic 
 - DNS resolvers
 - Any non-HTTP service exposed to the internet
 
+
+![Base Architecture](../../../images/anfw-centralized-ingress-egress-east-west-2az.png)
+
 ## Architecture Overview
 
 ### Components

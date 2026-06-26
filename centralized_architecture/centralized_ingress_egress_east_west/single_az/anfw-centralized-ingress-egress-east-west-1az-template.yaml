@@ -1,0 +1,1328 @@
+#Copyright 2021 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+#THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+#FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+#COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+#IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+#CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AWS Network Firewall - Centralized ingress (SSH/SFTP) + egress/east-west inspection. Ingress NFW in Edge VPC for non-web protocols, Egress NFW as TGW-native attachment. (single AZ)"
+
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - Label:
+          default: "VPC Parameters"
+        Parameters:
+          - AvailabilityZoneSelection
+      - Label:
+          default: "Access Control"
+        Parameters:
+          - AllowedSourceIP
+      - Label:
+          default: "EC2 Parameters"
+        Parameters:
+          - LatestAmiId
+Parameters:
+  AvailabilityZoneSelection:
+    Description: Availability Zone
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+
+  AllowedSourceIP:
+    Description: "Your public IP address for SSH/SFTP access (e.g., 203.0.113.25/32). Find yours at https://checkip.amazonaws.com"
+    Type: String
+    AllowedPattern: '^(\d{1,3}\.){3}\d{1,3}/32$'
+    ConstraintDescription: "Must be a valid IP in CIDR notation with /32 (e.g., 203.0.113.25/32)"
+
+  LatestAmiId:
+    Description: Latest EC2 AMI from Systems Manager Parameter Store
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64'
+
+Resources:
+# ============================================================================
+# SECRETS MANAGER - Random password for SSH/SFTP access
+# ============================================================================
+  DemoUserPassword:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "/${AWS::StackName}/demo-user-password"
+      Description: "Password for SSH (demouser on Spoke A) and SFTP (sftpuser on Spoke B)"
+      GenerateSecretString:
+        PasswordLength: 24
+        ExcludePunctuation: true
+
+# ============================================================================
+# SPOKE VPC A
+# ============================================================================
+  SpokeVPCA:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.1.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-${AWS::StackName}"
+
+  SubnetAWorkload:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      CidrBlock: "10.1.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-workload-${AWS::StackName}"
+
+  SubnetATGW:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      CidrBlock: "10.1.0.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-tgw-${AWS::StackName}"
+
+  SpokeAEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow instances to get to SSM Systems Manager
+      VpcId: !Ref SpokeVPCA
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.1.0.0/16
+          Description: "Allow HTTPS traffic from Spoke A VPC for SSM access"
+
+  SpokeASSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeAEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      SubnetIds:
+        - !Ref SubnetAWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCA
+
+  SpokeAEC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeAEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      SubnetIds:
+        - !Ref SubnetAWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCA
+
+  SpokeASSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeAEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      SubnetIds:
+        - !Ref SubnetAWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCA
+
+  SubnetARole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "subnet-a-role-${AWS::StackName}"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ReadDemoPassword
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DemoUserPassword
+
+  SubnetAInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref SubnetARole
+
+  SubnetASecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "SSH access from Ingress VPC and private networks"
+      GroupName: !Sub "spoke-a-sec-group-${AWS::StackName}"
+      VpcId: !Ref SpokeVPCA
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          CidrIp: 10.0.0.0/8
+          Description: "Allow ICMP from private networks"
+          FromPort: "-1"
+          ToPort: "-1"
+        - IpProtocol: tcp
+          CidrIp: 100.64.0.0/16
+          Description: "Allow SSH from Ingress VPC (NLB traffic)"
+          FromPort: 22
+          ToPort: 22
+        - IpProtocol: tcp
+          CidrIp: 10.1.0.0/16
+          Description: "Allow SSH from Spoke A VPC (NLB health checks)"
+          FromPort: 22
+          ToPort: 22
+
+  EC2SubnetA:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressFirewallDefaultRoute
+      - SubnetAWorkloadDefaultRoute
+      - SpokeToEgressFirewallRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetAWorkload
+      InstanceType: t2.micro
+      PrivateIpAddress: "10.1.1.10"
+      SecurityGroupIds:
+        - !Ref SubnetASecGroup
+      IamInstanceProfile: !Ref SubnetAInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Wait for egress connectivity
+          for i in $(seq 1 30); do curl -s --max-time 5 https://al2023-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
+          # Get password from Secrets Manager
+          PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${DemoUserPassword} --region ${AWS::Region} --query SecretString --output text)
+          # Create demo user with password auth
+          useradd demouser
+          echo "demouser:$PASSWORD" | chpasswd
+          # Enable password authentication in sshd
+          sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          systemctl restart sshd
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-ssh-bastion-${AWS::StackName}"
+
+# ============================================================================
+# SPOKE VPC B
+# ============================================================================
+  SpokeVPCB:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.2.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-${AWS::StackName}"
+
+  SubnetBWorkload:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      CidrBlock: "10.2.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-workload-${AWS::StackName}"
+
+  SubnetBTGW:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      CidrBlock: "10.2.0.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-tgw-${AWS::StackName}"
+
+  SpokeBEndpointSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow instances to get to SSM Systems Manager
+      VpcId: !Ref SpokeVPCB
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 10.2.0.0/16
+          Description: "Allow HTTPS traffic from Spoke B VPC for SSM access"
+
+  SpokeBSSMEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeBEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssm"
+      SubnetIds:
+        - !Ref SubnetBWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCB
+
+  SpokeBEC2MessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeBEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ec2messages"
+      SubnetIds:
+        - !Ref SubnetBWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCB
+
+  SpokeBSSMMessagesEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      PrivateDnsEnabled: true
+      SecurityGroupIds:
+        - !Ref SpokeBEndpointSecurityGroup
+      ServiceName: !Sub "com.amazonaws.${AWS::Region}.ssmmessages"
+      SubnetIds:
+        - !Ref SubnetBWorkload
+      VpcEndpointType: Interface
+      VpcId: !Ref SpokeVPCB
+
+  SubnetBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "subnet-b-role-${AWS::StackName}"
+      Path: "/"
+      ManagedPolicyArns:
+        - "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: ReadDemoPassword
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Ref DemoUserPassword
+
+  SubnetBInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref SubnetBRole
+
+  SubnetBSecGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "SFTP access from Ingress VPC and private networks"
+      GroupName: !Sub "spoke-b-sec-group-${AWS::StackName}"
+      VpcId: !Ref SpokeVPCB
+      SecurityGroupIngress:
+        - IpProtocol: icmp
+          CidrIp: 10.0.0.0/8
+          Description: "Allow ICMP from private networks"
+          FromPort: "-1"
+          ToPort: "-1"
+        - IpProtocol: tcp
+          CidrIp: 100.64.0.0/16
+          Description: "Allow SSH/SFTP from Ingress VPC (NLB traffic)"
+          FromPort: 22
+          ToPort: 22
+        - IpProtocol: tcp
+          CidrIp: 10.2.0.0/16
+          Description: "Allow SSH/SFTP from Spoke B VPC (NLB health checks)"
+          FromPort: 22
+          ToPort: 22
+
+  EC2SubnetB:
+    Type: 'AWS::EC2::Instance'
+    DependsOn:
+      - IngressFirewallDefaultRoute
+      - SubnetBWorkloadDefaultRoute
+      - SpokeToEgressFirewallRoute
+    Properties:
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetBWorkload
+      InstanceType: t2.micro
+      PrivateIpAddress: "10.2.1.10"
+      SecurityGroupIds:
+        - !Ref SubnetBSecGroup
+      IamInstanceProfile: !Ref SubnetBInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # Wait for egress connectivity
+          for i in $(seq 1 30); do curl -s --max-time 5 https://al2023-repos-${AWS::Region}.s3.dualstack.${AWS::Region}.amazonaws.com && break || sleep 10; done
+          # Get password from Secrets Manager
+          PASSWORD=$(aws secretsmanager get-secret-value --secret-id ${DemoUserPassword} --region ${AWS::Region} --query SecretString --output text)
+          # Create SFTP-only user with password auth
+          groupadd sftpusers
+          useradd -g sftpusers -s /sbin/nologin sftpuser
+          echo "sftpuser:$PASSWORD" | chpasswd
+          mkdir -p /home/sftpuser/upload
+          chown root:root /home/sftpuser
+          chmod 755 /home/sftpuser
+          chown sftpuser:sftpusers /home/sftpuser/upload
+          # Enable password auth and configure SFTP chroot
+          sed -i 's/^PasswordAuthentication no/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          sed -i 's/^#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+          cat >> /etc/ssh/sshd_config <<'EOF'
+          Match Group sftpusers
+              ForceCommand internal-sftp
+              ChrootDirectory /home/%u
+              AllowTcpForwarding no
+              X11Forwarding no
+          EOF
+          systemctl restart sshd
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-sftp-server-${AWS::StackName}"
+
+# ============================================================================
+# INGRESS VPC (Edge VPC) - Hosts IGW, Ingress Network Firewall, and NLB
+# All inbound internet traffic enters here and is inspected before reaching spokes
+# ============================================================================
+  IngressVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "100.64.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-${AWS::StackName}"
+
+  IngressFirewallSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref IngressVPC
+      CidrBlock: "100.64.0.16/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-firewall-${AWS::StackName}"
+
+  IngressPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref IngressVPC
+      CidrBlock: "100.64.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-public-${AWS::StackName}"
+
+  IngressTGWSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref IngressVPC
+      CidrBlock: "100.64.0.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-tgw-${AWS::StackName}"
+
+  IngressInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-igw-${AWS::StackName}"
+
+  AttachIngressGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref IngressVPC
+      InternetGatewayId: !Ref IngressInternetGateway
+
+  # Internet-facing NLB receives inbound traffic after firewall inspection
+  IngressNLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Allow SSH and SFTP inbound traffic to Ingress NLB"
+      GroupName: !Sub "ingress-nlb-sg-${AWS::StackName}"
+      VpcId: !Ref IngressVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          CidrIp: !Ref AllowedSourceIP
+          Description: "Allow SSH from allowed IP (port 22 to Spoke A)"
+          FromPort: 22
+          ToPort: 22
+        - IpProtocol: tcp
+          CidrIp: !Ref AllowedSourceIP
+          Description: "Allow SFTP from allowed IP (port 2222 to Spoke B)"
+          FromPort: 2222
+          ToPort: 2222
+
+  IngressNLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: AttachIngressGateway
+    Properties:
+      Scheme: internet-facing
+      Type: network
+      SecurityGroups:
+        - !Ref IngressNLBSecurityGroup
+      Subnets:
+        - !Ref IngressPublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-nlb-${AWS::StackName}"
+
+  # SSH target group → Spoke A EC2 (10.1.1.10:22)
+  IngressNLBTargetGroupSSH:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 22
+      Protocol: TCP
+      TargetType: ip
+      VpcId: !Ref IngressVPC
+      Targets:
+        - Id: "10.1.1.10"
+          AvailabilityZone: "all"
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-tg-ssh-${AWS::StackName}"
+
+  # SFTP target group → Spoke B EC2 (10.2.1.10:22)
+  IngressNLBTargetGroupSFTP:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Port: 22
+      Protocol: TCP
+      TargetType: ip
+      VpcId: !Ref IngressVPC
+      Targets:
+        - Id: "10.2.1.10"
+          AvailabilityZone: "all"
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-tg-sftp-${AWS::StackName}"
+
+  # Port 22 listener → SSH bastion (Spoke A)
+  IngressNLBListenerSSH:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref IngressNLB
+      Port: 22
+      Protocol: TCP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref IngressNLBTargetGroupSSH
+
+  # Port 2222 listener → SFTP server (Spoke B)
+  IngressNLBListenerSFTP:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref IngressNLB
+      Port: 2222
+      Protocol: TCP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref IngressNLBTargetGroupSFTP
+
+# ============================================================================
+# INGRESS NETWORK FIREWALL - VPC-attached, inspects inbound internet traffic
+# ============================================================================
+  IngressLogOnlyRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: !Sub "ingress-log-only-${AWS::StackName}"
+      Type: STATEFUL
+      RuleGroup:
+        RulesSource:
+          RulesString: |
+            # Ingress inspection log-only rules - Strict rule ordering
+            # Alerts on inbound traffic patterns without blocking.
+
+            # Alert on inbound HTTP traffic
+            alert http any any -> $HOME_NET any (msg:"Inbound HTTP traffic"; flow:to_server; sid:200001;)
+
+            # Alert on inbound HTTPS/TLS traffic
+            alert tls any any -> $HOME_NET any (msg:"Inbound TLS traffic"; flow:to_server; sid:200002;)
+
+            # Alert on inbound SSH
+            alert ssh any any -> $HOME_NET any (msg:"Inbound SSH traffic"; flow:to_server; sid:200003;)
+
+            # Alert on inbound ICMP
+            alert icmp any any -> $HOME_NET any (msg:"Inbound ICMP traffic"; sid:200004;)
+
+            # Alert on any other inbound traffic
+            alert ip any any -> $HOME_NET any (msg:"Inbound IP traffic"; flow:to_server; sid:200005;)
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+      Capacity: 100
+      Description: Ingress log-only rule group to alert on inbound traffic patterns without blocking
+
+  IngressFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: !Sub "ingress-firewall-policy-${AWS::StackName}"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref IngressLogOnlyRuleGroup
+            Priority: 100
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+          StreamExceptionPolicy: REJECT
+        PolicyVariables:
+          RuleVariables:
+            HOME_NET:
+              Definition:
+                - 10.0.0.0/8
+                - 100.64.0.0/16
+                - 172.16.0.0/12
+                - 192.168.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-firewall-policy-${AWS::StackName}"
+
+  IngressFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub "ingress-firewall-${AWS::StackName}"
+      FirewallPolicyArn: !Ref IngressFirewallPolicy
+      VpcId: !Ref IngressVPC
+      SubnetMappings:
+        - SubnetId: !Ref IngressFirewallSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-firewall-${AWS::StackName}"
+
+  IngressFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/ingress-fw/flow"
+      RetentionInDays: 30
+
+  IngressFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/ingress-fw/alert"
+      RetentionInDays: 30
+
+  IngressFirewallLog:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref IngressFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/ingress-fw/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/ingress-fw/alert"
+
+# ============================================================================
+# EGRESS VPC - Hosts NAT Gateway and IGW for outbound internet access
+# Traffic arrives here after passing through the TGW-native egress firewall
+# ============================================================================
+  EgressVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: "10.100.0.0/16"
+      EnableDnsSupport: "true"
+      EnableDnsHostnames: "true"
+      InstanceTenancy: default
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-${AWS::StackName}"
+
+  EgressTGWSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref EgressVPC
+      CidrBlock: "10.100.0.0/28"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-tgw-${AWS::StackName}"
+
+  EgressPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref EgressVPC
+      CidrBlock: "10.100.1.0/24"
+      AvailabilityZone: !Ref AvailabilityZoneSelection
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-public-${AWS::StackName}"
+
+  EgressInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-igw-${AWS::StackName}"
+
+  AttachEgressGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref EgressVPC
+      InternetGatewayId: !Ref EgressInternetGateway
+
+  EgressNATEIP:
+    Type: "AWS::EC2::EIP"
+    Properties:
+      Domain: vpc
+
+  EgressNATGateway:
+    Type: "AWS::EC2::NatGateway"
+    Properties:
+      AllocationId: !GetAtt EgressNATEIP.AllocationId
+      SubnetId: !Ref EgressPublicSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-natgw-${AWS::StackName}"
+
+# ============================================================================
+# EGRESS/EAST-WEST FIREWALL - TGW-native attached
+# Inspects all egress and spoke-to-spoke traffic. Sees true source IP before NAT.
+# ============================================================================
+  EgressLogOnlyRuleGroup:
+    Type: 'AWS::NetworkFirewall::RuleGroup'
+    Properties:
+      RuleGroupName: !Sub "egress-ew-log-only-${AWS::StackName}"
+      Type: STATEFUL
+      RuleGroup:
+        RulesSource:
+          RulesString: |
+            # Egress/East-West log-only rules - Strict rule ordering
+            # Alerts on traffic patterns without blocking.
+
+            # Alert on risky geos
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to RU"; flow:to_server; geoip:dst,RU; metadata:geo RU; sid:100001;)
+            alert ip $HOME_NET any -> any any (msg:"Egress traffic to CN"; flow:to_server; geoip:dst,CN; metadata:geo CN; sid:100002;)
+
+            # Alert on high risk TLDs
+            alert tls $HOME_NET any -> any any (tls.sni; content:".ru"; nocase; msg:"High risk TLD"; flow:to_server; sid:100003;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".xyz"; nocase; msg:"High risk TLD"; flow:to_server; sid:100005;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".info"; nocase; msg:"High risk TLD"; flow:to_server; sid:100007;)
+            alert tls $HOME_NET any -> any any (tls.sni; content:".onion"; nocase; msg:"High risk TLD"; flow:to_server; sid:100009;)
+
+            # Alert on specific protocols
+            alert icmp any any -> any any (msg:"Alert on ping"; sid:100011;)
+            alert http any any -> any any (msg:"Alert on http"; sid:100012;)
+            alert tls any any -> any any (msg:"Alert on tls (https)"; sid:100013;)
+            alert ssh any any -> any any (msg:"Alert on ssh"; sid:100014;)
+        StatefulRuleOptions:
+          RuleOrder: STRICT_ORDER
+      Capacity: 100
+      Description: Egress/east-west log-only rule group to alert on traffic patterns without blocking
+
+  EgressFirewallPolicy:
+    Type: AWS::NetworkFirewall::FirewallPolicy
+    Properties:
+      FirewallPolicyName: !Sub "egress-ew-firewall-policy-${AWS::StackName}"
+      FirewallPolicy:
+        StatelessDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatelessFragmentDefaultActions:
+          - 'aws:forward_to_sfe'
+        StatefulRuleGroupReferences:
+          - ResourceArn: !Ref EgressLogOnlyRuleGroup
+            Priority: 100
+        StatefulEngineOptions:
+          RuleOrder: STRICT_ORDER
+          StreamExceptionPolicy: REJECT
+        PolicyVariables:
+          RuleVariables:
+            HOME_NET:
+              Definition:
+                - 10.0.0.0/8
+                - 172.16.0.0/12
+                - 192.168.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-ew-firewall-policy-${AWS::StackName}"
+
+  EgressFirewall:
+    Type: AWS::NetworkFirewall::Firewall
+    Properties:
+      FirewallName: !Sub "egress-and-east-west-firewall-${AWS::StackName}"
+      FirewallPolicyArn: !Ref EgressFirewallPolicy
+      TransitGatewayId: !Ref CentralTransitGateway
+      AvailabilityZoneMappings:
+        - AvailabilityZone: !GetAtt EgressTGWSubnet.AvailabilityZoneId
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-and-east-west-firewall-${AWS::StackName}"
+
+  EgressFirewallLogFlowGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/egress-ew-fw/flow"
+      RetentionInDays: 30
+
+  EgressFirewallLogAlertGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/${AWS::StackName}/egress-ew-fw/alert"
+      RetentionInDays: 30
+
+  EgressFirewallLog:
+    Type: AWS::NetworkFirewall::LoggingConfiguration
+    Properties:
+      FirewallArn: !Ref EgressFirewall
+      LoggingConfiguration:
+        LogDestinationConfigs:
+          - LogType: FLOW
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/egress-ew-fw/flow"
+          - LogType: ALERT
+            LogDestinationType: CloudWatchLogs
+            LogDestination:
+              logGroup: !Sub "/${AWS::StackName}/egress-ew-fw/alert"
+
+# ============================================================================
+# TRANSIT GATEWAY
+# ============================================================================
+  CentralTransitGateway:
+    Type: "AWS::EC2::TransitGateway"
+    Properties:
+      AmazonSideAsn: 65000
+      Description: "TGW - Centralized Ingress + Egress/East-West Inspection"
+      AutoAcceptSharedAttachments: "disable"
+      DefaultRouteTableAssociation: "disable"
+      DefaultRouteTablePropagation: "disable"
+      DnsSupport: "enable"
+      VpnEcmpSupport: "enable"
+      Tags:
+        - Key: Name
+          Value: !Sub "tgw-${AWS::StackName}"
+
+  # Ingress VPC attachment
+  AttachIngressVPC:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds:
+        - !Ref IngressTGWSubnet
+      Options:
+        ApplianceModeSupport: enable
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-vpc-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+      VpcId: !Ref IngressVPC
+
+  # Egress VPC attachment
+  AttachEgressVPC:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds:
+        - !Ref EgressTGWSubnet
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-vpc-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+      VpcId: !Ref EgressVPC
+
+  # Spoke A attachment
+  AttachSpokeVPCA:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds:
+        - !Ref SubnetATGW
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+      VpcId: !Ref SpokeVPCA
+
+  # Spoke B attachment
+  AttachSpokeVPCB:
+    Type: "AWS::EC2::TransitGatewayAttachment"
+    Properties:
+      SubnetIds:
+        - !Ref SubnetBTGW
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-attach-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+      VpcId: !Ref SpokeVPCB
+
+# ============================================================================
+# TGW ROUTE TABLES
+# ============================================================================
+
+  # Spoke Route Table - associated with spoke VPC attachments
+  # Routes egress/east-west through egress firewall, ingress return to Ingress VPC
+  SpokeRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+
+  # Ingress VPC Route Table - associated with Ingress VPC attachment
+  # Propagates spoke routes so Edge NLB can reach spoke NLBs
+  IngressVPCRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-vpc-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+
+  # Egress Inspection Route Table - associated with TGW-native egress firewall
+  # After inspection: egress goes to Egress VPC, east-west goes to spoke (propagated)
+  EgressInspectionRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-inspection-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+
+  # Egress VPC Route Table - associated with Egress VPC attachment
+  # Return traffic from internet goes back through egress firewall for symmetric inspection
+  EgressVPCRouteTable:
+    Type: "AWS::EC2::TransitGatewayRouteTable"
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-vpc-route-table-${AWS::StackName}"
+      TransitGatewayId: !Ref CentralTransitGateway
+
+  # --- Associations ---
+  AssociateSpokeARouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCA
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  AssociateSpokeBRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCB
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  AssociateIngressVPCRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachIngressVPC
+      TransitGatewayRouteTableId: !Ref IngressVPCRouteTable
+
+  AssociateEgressFirewallRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !GetAtt EgressFirewall.TransitGatewayAttachmentId
+      TransitGatewayRouteTableId: !Ref EgressInspectionRouteTable
+
+  AssociateEgressVPCRouteTable:
+    Type: AWS::EC2::TransitGatewayRouteTableAssociation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachEgressVPC
+      TransitGatewayRouteTableId: !Ref EgressVPCRouteTable
+
+  # --- Propagations ---
+  # Propagate spoke routes to Ingress VPC RT (so Edge NLB can reach spoke NLBs)
+  PropagateVPCAToIngressRT:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCA
+      TransitGatewayRouteTableId: !Ref IngressVPCRouteTable
+
+  PropagateVPCBToIngressRT:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCB
+      TransitGatewayRouteTableId: !Ref IngressVPCRouteTable
+
+  # Propagate spoke routes to Egress Inspection RT (for east-west delivery and return traffic)
+  PropagateVPCAToEgressInspectionRT:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCA
+      TransitGatewayRouteTableId: !Ref EgressInspectionRouteTable
+
+  PropagateVPCBToEgressInspectionRT:
+    Type: AWS::EC2::TransitGatewayRouteTablePropagation
+    Properties:
+      TransitGatewayAttachmentId: !Ref AttachSpokeVPCB
+      TransitGatewayRouteTableId: !Ref EgressInspectionRouteTable
+
+  # --- Static Routes ---
+  # Spoke RT: 0.0.0.0/0 → Egress Firewall (egress + east-west inspection)
+  SpokeToEgressFirewallRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayAttachmentId: !GetAtt EgressFirewall.TransitGatewayAttachmentId
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  # Spoke RT: 100.64.0.0/16 → Ingress VPC (return traffic to Edge NLB)
+  SpokeToIngressVPCRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "100.64.0.0/16"
+      TransitGatewayAttachmentId: !Ref AttachIngressVPC
+      TransitGatewayRouteTableId: !Ref SpokeRouteTable
+
+  # Egress Inspection RT: 0.0.0.0/0 → Egress VPC (after inspection, send to NAT)
+  EgressInspectionToEgressVPCRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayAttachmentId: !Ref AttachEgressVPC
+      TransitGatewayRouteTableId: !Ref EgressInspectionRouteTable
+
+  # Egress VPC RT: 0.0.0.0/0 → Egress Firewall (return traffic goes back through firewall)
+  EgressVPCToFirewallRoute:
+    Type: AWS::EC2::TransitGatewayRoute
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayAttachmentId: !GetAtt EgressFirewall.TransitGatewayAttachmentId
+      TransitGatewayRouteTableId: !Ref EgressVPCRouteTable
+
+# ============================================================================
+# INGRESS VPC ROUTE TABLES
+# ============================================================================
+
+  # IGW Ingress Route Table - steers inbound traffic through firewall before NLB
+  IngressIGWRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref IngressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-igw-route-table-${AWS::StackName}"
+
+  IngressIGWRouteTableAssociation:
+    Type: AWS::EC2::GatewayRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressIGWRouteTable
+      GatewayId: !Ref IngressInternetGateway
+
+  # Route traffic destined for Public Subnet through firewall endpoint
+  IngressIGWToFirewallRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: "100.64.1.0/24"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressIGWRouteTable
+
+  # Firewall Subnet Route Table
+  # After inspection: 0.0.0.0/0 → IGW (return traffic to internet)
+  # 10.0.0.0/8 → TGW (inspected inbound traffic forwarded to spokes via NLB in public subnet)
+  IngressFirewallRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref IngressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-firewall-route-table-${AWS::StackName}"
+
+  IngressFirewallRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressFirewallRouteTable
+      SubnetId: !Ref IngressFirewallSubnet
+
+  IngressFirewallDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIngressGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref IngressInternetGateway
+      RouteTableId: !Ref IngressFirewallRouteTable
+
+  # Public Subnet Route Table (where NLB lives)
+  # 0.0.0.0/0 → Firewall Endpoint (symmetric inspection for NLB return traffic)
+  # 10.0.0.0/8 → TGW (NLB forwards to spoke NLBs via TGW)
+  IngressPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref IngressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-public-route-table-${AWS::StackName}"
+
+  IngressPublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressPublicRouteTable
+      SubnetId: !Ref IngressPublicSubnet
+
+  IngressPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      VpcEndpointId: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
+      RouteTableId: !Ref IngressPublicRouteTable
+
+  IngressPublicTGWRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIngressVPC
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref IngressPublicRouteTable
+
+  # TGW Subnet Route Table - only needs local routes (traffic from TGW to NLB is VPC-local)
+  IngressTGWRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref IngressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "ingress-tgw-route-table-${AWS::StackName}"
+
+  IngressTGWRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref IngressTGWRouteTable
+      SubnetId: !Ref IngressTGWSubnet
+
+# ============================================================================
+# EGRESS VPC ROUTE TABLES
+# ============================================================================
+
+  # TGW Subnet Route Table: 0.0.0.0/0 → NAT GW
+  EgressTGWRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EgressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-tgw-route-table-${AWS::StackName}"
+
+  EgressTGWRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref EgressTGWRouteTable
+      SubnetId: !Ref EgressTGWSubnet
+
+  EgressTGWDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref EgressNATGateway
+      RouteTableId: !Ref EgressTGWRouteTable
+
+  # Public Subnet Route Table: 0.0.0.0/0 → IGW, 10.0.0.0/8 → TGW (return traffic)
+  EgressPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref EgressVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "egress-public-route-table-${AWS::StackName}"
+
+  EgressPublicRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref EgressPublicRouteTable
+      SubnetId: !Ref EgressPublicSubnet
+
+  EgressPublicDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachEgressGateway
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref EgressInternetGateway
+      RouteTableId: !Ref EgressPublicRouteTable
+
+  EgressPublicToTGWRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachEgressVPC
+    Properties:
+      DestinationCidrBlock: "10.0.0.0/8"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref EgressPublicRouteTable
+
+# ============================================================================
+# SPOKE VPC ROUTE TABLES
+# ============================================================================
+
+  # Spoke A workload subnet: 0.0.0.0/0 → TGW
+  SubnetAWorkloadRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-workload-route-table-${AWS::StackName}"
+
+  SubnetAWorkloadRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SubnetAWorkloadRouteTable
+      SubnetId: !Ref SubnetAWorkload
+
+  SubnetAWorkloadDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachSpokeVPCA
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref SubnetAWorkloadRouteTable
+
+  # Spoke B workload subnet: 0.0.0.0/0 → TGW
+  SubnetBWorkloadRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-workload-route-table-${AWS::StackName}"
+
+  SubnetBWorkloadRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SubnetBWorkloadRouteTable
+      SubnetId: !Ref SubnetBWorkload
+
+  SubnetBWorkloadDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachSpokeVPCB
+    Properties:
+      DestinationCidrBlock: "0.0.0.0/0"
+      TransitGatewayId: !Ref CentralTransitGateway
+      RouteTableId: !Ref SubnetBWorkloadRouteTable
+
+  # TGW subnets - local routes only
+  SubnetATGWRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCA
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-a-tgw-route-table-${AWS::StackName}"
+
+  SubnetATGWRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SubnetATGWRouteTable
+      SubnetId: !Ref SubnetATGW
+
+  SubnetBTGWRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref SpokeVPCB
+      Tags:
+        - Key: Name
+          Value: !Sub "spoke-b-tgw-route-table-${AWS::StackName}"
+
+  SubnetBTGWRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref SubnetBTGWRouteTable
+      SubnetId: !Ref SubnetBTGW
+
+# ============================================================================
+# Traffic Flow Summary:
+#
+# INGRESS - SSH (port 22 → Spoke A bastion):
+#   Internet → IGW → (IGW RT: Public CIDR → FW Endpoint) → Ingress Firewall
+#   → (local route) → NLB in Public Subnet (port 22) → (Public RT: 10.0.0.0/8 → TGW)
+#   → TGW → Spoke A EC2 (10.1.1.10)
+#
+# INGRESS - SFTP (port 2222 → Spoke B SFTP server):
+#   Internet → IGW → (IGW RT: Public CIDR → FW Endpoint) → Ingress Firewall
+#   → (local route) → NLB in Public Subnet (port 2222) → (Public RT: 10.0.0.0/8 → TGW)
+#   → TGW → Spoke B EC2 (10.2.1.10)
+#
+# INGRESS RETURN (symmetric through ingress firewall):
+#   EC2 → (Workload RT: 0.0.0.0/0 → TGW) → TGW
+#   → (Spoke RT: 100.64.0.0/16 → Ingress VPC) → Ingress NLB
+#   → (Public RT: 0.0.0.0/0 → FW Endpoint) → Ingress Firewall
+#   → (Firewall RT: 0.0.0.0/0 → IGW) → Internet
+#
+# EGRESS PATH (sees true source IP):
+#   Spoke EC2 → (Workload RT: 0.0.0.0/0 → TGW)
+#   → TGW (Spoke RT: 0.0.0.0/0 → Egress Firewall)
+#   → Egress/East-West Firewall (sees real source IP 10.x.x.x)
+#   → TGW (Inspection RT: 0.0.0.0/0 → Egress VPC)
+#   → Egress VPC TGW Subnet → (TGW RT: 0.0.0.0/0 → NAT GW)
+#   → NAT Gateway → (Public RT: 0.0.0.0/0 → IGW) → Internet
+#
+# EAST-WEST (spoke-to-spoke, inspected):
+#   Spoke A EC2 → TGW (Spoke RT: 0.0.0.0/0 → Egress Firewall)
+#   → Egress/East-West Firewall
+#   → TGW (Inspection RT: propagated 10.2.0.0/16 → Spoke B) → Spoke B EC2
+# ============================================================================
+
+Outputs:
+  DemoPasswordSecret:
+    Description: "Secrets Manager ARN for SSH/SFTP password (user: demouser for SSH, sftpuser for SFTP)"
+    Value: !Ref DemoUserPassword
+    Export:
+      Name: !Sub "${AWS::StackName}-DemoPasswordSecret"
+
+  IngressFirewallEndpoint:
+    Description: Ingress Network Firewall Endpoint ID
+    Value: !Select [1, !Split [":", !Select [0, !GetAtt IngressFirewall.EndpointIds]]]
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressFirewallEndpoint"
+
+  EgressFirewallAttachmentId:
+    Description: Egress/East-West Firewall TGW Attachment ID
+    Value: !GetAtt EgressFirewall.TransitGatewayAttachmentId
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressFirewallAttachment"
+
+  TransitGatewayId:
+    Description: Transit Gateway ID
+    Value: !Ref CentralTransitGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-TransitGatewayId"
+
+  IngressNLBDNSName:
+    Description: Ingress NLB DNS Name (internet-facing entry point)
+    Value: !GetAtt IngressNLB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-IngressNLBDNSName"
+
+  EgressNATEIPAllocationId:
+    Description: Egress NAT Gateway Elastic IP
+    Value: !Ref EgressNATEIP
+    Export:
+      Name: !Sub "${AWS::StackName}-EgressNATEIP"

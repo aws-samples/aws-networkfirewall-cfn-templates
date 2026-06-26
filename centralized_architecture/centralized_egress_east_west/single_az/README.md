@@ -1,10 +1,10 @@
 # Centralized Architecture - Single AZ Deployment
 
-**Template File:** [anfw-centralized-1az-template.yaml](anfw-centralized-1az-template.yaml)
+**Template File:** [anfw-centralized-egress-east-west-1az-template.yaml](anfw-centralized-egress-east-west-1az-template.yaml)
 
 This template deploys AWS Network Firewall in a centralized architecture pattern within a single Availability Zone. This configuration is designed for testing, development, and proof-of-concept environments.
 
-![Base Architecture](../../images/anfw-centralized-model-1az.png)
+![Base Architecture](../../../images/anfw-centralized-model-1az.png)
 
 ## Architecture Overview
 
@@ -45,7 +45,7 @@ Two example workload VPCs that demonstrate traffic routing through the inspectio
    ```bash
    aws cloudformation create-stack \
      --stack-name anfw-centralized-1az \
-     --template-body file://anfw-centralized-1az-template.yaml \
+     --template-body file://anfw-centralized-egress-east-west-1az-template.yaml \
      --capabilities CAPABILITY_IAM
    ```
 
@@ -56,7 +56,7 @@ Two example workload VPCs that demonstrate traffic routing through the inspectio
 
 ## Production Considerations
 
-For environments requiring high availability, consider the [Two AZ Deployment](../two_az_deployment/) which provides:
+For environments requiring high availability, consider the [Two AZ Deployment](../two_az/) which provides:
 - High availability across multiple Availability Zones
 - Better fault tolerance
 - Resilient architecture

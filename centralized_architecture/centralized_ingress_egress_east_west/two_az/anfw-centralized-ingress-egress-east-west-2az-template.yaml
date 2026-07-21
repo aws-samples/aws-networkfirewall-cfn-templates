@@ -8,7 +8,7 @@
 #CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "AWS Network Firewall - Centralized ingress (SSH/SFTP) + egress/east-west inspection. Ingress NFW in Edge VPC for non-web protocols, Egress NFW as TGW-native attachment. (two AZ)"
+Description: "AWS Network Firewall - Centralized ingress (SSH/SFTP) + egress/east-west inspection. Ingress NFW in Edge VPC for non-web protocols, Egress NFW as TGW-native attachment. (uksb-u3kfd0gl61)(tag: centralized-ingress-egress-east-west-two-az)"
 
 Metadata:
   "AWS::CloudFormation::Interface":
